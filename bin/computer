@@ -60,6 +60,22 @@ VNC_PW_FILE="$STATE_DIR/vnc-password"
 BIND_IP="${COMPUTER_BIND_IP:-$(ip -4 -o addr show tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1 || true)}"
 BIND_IP="${BIND_IP:-127.0.0.1}"
 
+# The address a viewer is ADVERTISED at, deliberately separate from BIND_IP.
+#
+# Binding decides who can REACH a port; this decides what URL is handed out. The
+# two coincide on a tailnet -- bind the tailnet IP, advertise the same address --
+# but they must be allowed to diverge behind a reverse proxy. There the port has
+# to bind somewhere the proxy can reach (a docker-internal or wildcard address,
+# neither of which is usable in a browser), while the URL has to be the public
+# hostname.
+#
+# Without this, an instance with no tailnet cannot advertise a viewer URL a human
+# can open at all: the best it can do is 127.0.0.1, which points at the viewer's
+# OWN machine, or 0.0.0.0, which is not an address. Set COMPUTER_PUBLIC_URL to
+# the externally reachable base (e.g. https://desktop.example.com) and the viewer
+# URL becomes that.
+PUBLIC_URL="${COMPUTER_PUBLIC_URL:-}"
+
 # Generate/reuse a VNC password. Empty string means no authentication.
 vnc_password() {
   [ "${1:-0}" = "1" ] && { printf ''; return; }
@@ -531,6 +547,11 @@ app_vnc_password() {
 app_viewer_url() {
   local v; v="$(app_field "$1" viewer)"
   [ -n "$v" ] || return 1
+  # An advertised public URL wins over the bind address; see PUBLIC_URL above.
+  if [ -n "$PUBLIC_URL" ]; then
+    printf '%s/vnc.html?autoconnect=1&resize=scale' "${PUBLIC_URL%/}"
+    return 0
+  fi
   printf 'http://%s:%s/vnc.html?autoconnect=1&resize=scale' "$BIND_IP" "${v%%:*}"
 }
 
@@ -747,19 +768,35 @@ cmd_apps_up() {
     geo="$(app_field "$id" geometry)"; geo="${geo:-$GEO}"
     a+=(-e "VNC_PASSWORD=$(app_vnc_password "$id")")
     a+=(-e "SCREEN_GEOMETRY=$geo")
-    # Loopback + tailnet only. Never 0.0.0.0.
-    a+=(-p "127.0.0.1:${hp}:${cp}")
-    [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${hp}:${cp}")
+    # Loopback is not optional: the harness's own /apps/web proxy reaches an app
+    # on 127.0.0.1, so the panel depends on it. BIND_IP adds a second publish for
+    # whatever can reach that address (a tailnet peer, or a reverse proxy on a
+    # shared docker network).
+    #
+    # 0.0.0.0 is the one value that must NOT be paired with the loopback publish:
+    # it already includes 127.0.0.1, so binding both fails the whole launch with
+    # "listen tcp4 127.0.0.1:PORT: bind: address already in use". A wildcard bind
+    # replaces the loopback one rather than joining it.
+    if [ "$BIND_IP" = "0.0.0.0" ]; then
+      a+=(-p "0.0.0.0:${hp}:${cp}")
+    else
+      a+=(-p "127.0.0.1:${hp}:${cp}")
+      [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${hp}:${cp}")
+    fi
   fi
 
-  # An HTTP dashboard. Published on loopback + tailnet as the FALLBACK, so the
+  # An HTTP dashboard. Published on loopback + BIND_IP as the FALLBACK, so the
   # panel still works when the same-origin /apps/web proxy route is not
-  # available. Loopback + tailnet only — never 0.0.0.0.
+  # available. Same wildcard rule as the viewer above: 0.0.0.0 subsumes loopback.
   if [ -n "$web" ]; then
     local whp wcp; whp="${web%%:*}"; wcp="${web##*:}"
     [ "$wcp" = "$web" ] && wcp=80
-    a+=(-p "127.0.0.1:${whp}:${wcp}")
-    [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${whp}:${wcp}")
+    if [ "$BIND_IP" = "0.0.0.0" ]; then
+      a+=(-p "0.0.0.0:${whp}:${wcp}")
+    else
+      a+=(-p "127.0.0.1:${whp}:${wcp}")
+      [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${whp}:${wcp}")
+    fi
   fi
 
   a+=("$image")
@@ -869,11 +906,16 @@ computer apps — launch application containers from a fixed catalog
 The catalog is an allowlist: `apps up` takes an app id and nothing else. There
 is no way to pass an image name or a docker flag. The schema has no field for
 --privileged, --network host, --cap-add, --device or a host mount, so those are
-unrepresentable rather than rejected. Viewers bind to loopback and the tailnet
-only — never 0.0.0.0.
+unrepresentable rather than rejected. By default viewers bind to loopback and the
+tailnet only — never 0.0.0.0 — because binding is an operator decision: set
+COMPUTER_BIND_IP to publish somewhere a reverse proxy can reach, and
+COMPUTER_PUBLIC_URL so the URL handed to a human is the public one rather than
+the bind address.
 
 Env: COMPUTER_APPS_FILE (default <skill>/apps.yaml)
      COMPUTER_APPS_STATE (default <skill>/.state)
+     COMPUTER_BIND_IP (where viewers publish)
+     COMPUTER_PUBLIC_URL (base URL viewers are advertised at)
      APPS_LOG_LINES (default 60)
 EOF
 }
@@ -931,7 +973,16 @@ computer — a stateful Docker computer
 
 Env: COMPUTER_WORKSPACE COMPUTER_IMAGE COMPUTER_NAME COMPUTER_CPUS
      COMPUTER_MEM COMPUTER_GEOMETRY COMPUTER_PORT COMPUTER_BIND_IP
-     COMPUTER_VNC_PASSWORD
+     COMPUTER_PUBLIC_URL COMPUTER_VNC_PASSWORD
+
+     COMPUTER_BIND_IP    where viewers are PUBLISHED (default: tailnet0, else
+                         127.0.0.1). Set it to an address your reverse proxy can
+                         reach when there is no tailnet.
+     COMPUTER_PUBLIC_URL the base URL viewers are ADVERTISED at, when that
+                         differs from the bind address (e.g. behind a proxy).
+                         Without it the advertised URL is derived from the bind
+                         address, which is a loopback or internal address and
+                         therefore unusable in a browser.
 EOF
 }
 
