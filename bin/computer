@@ -554,11 +554,21 @@ app_running_password() {
 app_viewer_password() {
   local id="$1" f pw
   f="$(app_password_file "$id")"
-  if [ -f "$f" ]; then cat "$f"; return 0; fi
-  local lf="$APPS_STATE_LEGACY/$id.vnc-password"
-  if [ -f "$lf" ]; then pw="$(cat "$lf")"; else pw="$(app_running_password "$id")"; fi
+  # Never let an EXISTING file short-circuit recovery unless it actually reads
+  # back a value: an unreadable or empty file would otherwise yield "" and skip
+  # the fallbacks -- exactly how a root-owned state file (written by a root exec)
+  # reproduced the original blank-password symptom after the first fix.
+  pw="$(cat "$f" 2>/dev/null)" || pw=""
+  if [ -z "$pw" ]; then
+    pw="$(cat "$APPS_STATE_LEGACY/$id.vnc-password" 2>/dev/null)" || pw=""
+  fi
+  [ -n "$pw" ] || pw="$(app_running_password "$id")"
   [ -n "$pw" ] || return 1
-  mkdir -p "$APPS_STATE"; printf '%s' "$pw" > "$f"; chmod 600 "$f"
+  # Re-persist best-effort. A failure here must not withhold the password we
+  # already resolved -- the daemon is the authority, the file is only a cache.
+  if mkdir -p "$APPS_STATE" 2>/dev/null; then
+    { printf '%s' "$pw" > "$f"; } 2>/dev/null && chmod 600 "$f" 2>/dev/null || true
+  fi
   printf '%s' "$pw"
 }
 

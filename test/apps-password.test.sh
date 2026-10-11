@@ -68,5 +68,17 @@ else printf '  ok    read-only returns failure\n'; pass=$((pass+1)); fi
 rm -rf "$APPS_STATE" "$APPS_STATE_LEGACY"; STUB_PW=F0gpS1CxiN
 chk "the exact lost-state scenario"      "$(app_viewer_password desktop)" "F0gpS1CxiN"
 
+# An existing-but-unreadable file must not win over recovery. This happened for
+# real: a root-owned state file (from a root exec) made the CLI print "" while a
+# perfectly good password sat in the running container.
+rm -rf "$APPS_STATE"; mkdir -p "$APPS_STATE"; STUB_PW=FromContainer2
+printf 'Unreadable' > "$APPS_STATE/desktop.vnc-password"; chmod 000 "$APPS_STATE/desktop.vnc-password"
+chk "unreadable file falls back"         "$(app_viewer_password desktop)" "FromContainer2"
+chmod 600 "$APPS_STATE/desktop.vnc-password"
+
+rm -rf "$APPS_STATE"; mkdir -p "$APPS_STATE"; STUB_PW=FromContainer3
+: > "$APPS_STATE/desktop.vnc-password"
+chk "empty file falls back"              "$(app_viewer_password desktop)" "FromContainer3"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
