@@ -20,7 +20,7 @@ under a profile's `node_modules/` is simultaneously a bundle (for the plugin) an
 ```bash
 # 1. Declare the dependency (pins a version)
 cd /data/profiles/web
-pnpm add github:BluePointDigital/dsh-computer#v0.1.2
+pnpm add github:BluePointDigital/dsh-computer#v0.1.3
 
 # 2. Wire the rest: register the bundle, link the skill into the skill root,
 #    build the box image if absent, then verify the whole stack.
@@ -60,10 +60,12 @@ cordis.patch.yml    the bundle's mount row — the plugin's own declaration
 lib/                plugin code: index.js (server), client.js (GUI), proxy.js
 SKILL.md            the skill the agent reads
 bin/computer        the CLI: up / exec / sh / status / apps / build
+apps.yaml           the app catalog the menu renders (an allowlist, fail-closed)
 bin/install.sh      idempotent wiring + verification
 bin/switch-to-bundle.sh   migrate a profile from a hand-appended insert to a bundle
 bin/test-switch.sh  round-trip test for the above, against a copy of the profile
 image/              Dockerfile + box provisioning scripts
+test/               plugin test suite
 ```
 
 ## Notes on the bundle form

@@ -339,6 +339,34 @@ else
   echo "       (Not fatal if the harness is running elsewhere; check the GUI sidebar.)"
 fi
 
+# A MOUNTED PLUGIN IS NOT A WORKING MENU. The panel shells `computer apps`, which
+# reads the catalog at <skill>/apps.yaml. If that file is absent the menu mounts
+# and renders EMPTY while every check above still passes -- which is exactly what
+# a package migration did to this skill. So check the catalog, and then check the
+# CLI can actually read it: the file existing and the file working are different
+# claims.
+CATALOG="$PLUGIN_DIR/apps.yaml"
+if [ -f "$CATALOG" ]; then
+  APPS_N="$(grep -cE '^[[:space:]]*-[[:space:]]*id:' "$CATALOG" 2>/dev/null)" || APPS_N=0
+  ok "app catalog present ($APPS_N app(s) in $(basename "$CATALOG"))"
+  if [ "$APPS_N" = "0" ]; then
+    warn "the catalog defines no apps -- the menu will render empty"
+  fi
+else
+  bad "app catalog missing: $CATALOG"
+  echo "       The plugin would mount and the menu would render empty."
+  FAILED=1
+fi
+
+if [ -x "$PLUGIN_DIR/bin/computer" ]; then
+  if "$PLUGIN_DIR/bin/computer" apps >/dev/null 2>&1; then
+    ok "bin/computer apps reads the catalog"
+  else
+    bad "bin/computer apps fails -- the menu would render empty"
+    FAILED=1
+  fi
+fi
+
 step "Result"
 if [ "$FAILED" -eq 0 ]; then
   echo "  All checks passed. The Applications menu is mounted."

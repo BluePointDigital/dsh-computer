@@ -1,0 +1,98 @@
+# apps.yaml — the catalog of application containers this machine can launch.
+#
+# This is an ALLOWLIST, not a discovery list. `computer apps up <id>` can only
+# launch an app defined here, with the values written here: the launcher accepts
+# no image name and no docker flags from the command line.
+#
+# That is the whole safety design. The schema below has NO field for
+# --privileged, --network host, --cap-add, --device, or an arbitrary host mount,
+# so those cannot be requested at all — not "are rejected", but "cannot be
+# expressed". The parser is fail-closed on STRUCTURE: a line that is not key:
+# value is an error, never skipped. (It does not gatekeep key NAMES — an
+# unrecognised key is carried through and simply never read. That is safe
+# precisely because the launcher's flag set is fixed, so an unknown key cannot
+# reach docker as a flag; note it, though, so the file is not oversold.)
+#
+# Fields
+#   id           (required)  stable key used in commands; must be unique
+#   name         (required)  display name
+#   description              what it is for
+#   image        (required)  must exist locally; `apps up` says how to pull it
+#   viewer                   hostPort:containerPort — publishes a VNC/noVNC
+#                            desktop viewer, bound to loopback + tailnet ONLY.
+#                            0.0.0.0 is not expressible.
+#   web                      hostPort:containerPort — an HTTP app with its own
+#                            dashboard. The GUI reverse-proxies it at
+#                            /apps/web/<id>/ (same origin, so it inherits the
+#                            GUI's session, needs no extra port reachable, and
+#                            cannot refuse to be framed), and also publishes it
+#                            on hostPort as a fallback origin.
+#   webMode                  proxy (default) | direct. `direct` embeds the
+#                            published origin instead of the proxy mount. Use it
+#                            for dashboards that need WebSockets: the host
+#                            webserver matches upgrade routes by EXACT pathname
+#                            only, so a generic prefix upgrade proxy is not
+#                            possible and such an app renders half-dead through
+#                            the proxy.
+#   state                    persistent -> named volume at /home/agent that
+#                            survives `apps rm`. Host paths are not expressible.
+#   autostart                true | false. DEFAULT FALSE — apps are ON DEMAND.
+#                            Only `true` gives the container `--restart
+#                            unless-stopped`, so only those return by themselves
+#                            after the harness container reboots; everything else
+#                            waits for `apps up`. Set it deliberately, per app,
+#                            for the ones you want running with you. Changing it
+#                            re-binds on the next `apps up` (via docker update),
+#                            not merely at creation. An unparseable value is an
+#                            error, never a silent fallback.
+#   cpus / mem / shm         resource caps, always applied (default 2 / 4g / 1g)
+#   command                  optional shell command, overriding the image default
+#
+# Constraints of the reader (deliberate): flat two-level YAML only, `#` always
+# starts a comment, values are unquoted. Add an app by copying a block, then run
+# `computer apps discover` to see which local images are not yet catalogued.
+#
+# Port convention: 6080 belongs to the workspace-scoped `computer up --desktop`
+# box, so app viewers use 6081-6099. HTTP dashboards use 8090-8099. Two
+# listeners on one port collide silently.
+
+version: 1
+
+apps:
+  - id: desktop
+    name: Linux Desktop
+    description: Full Debian desktop with Chromium and a browser viewer; agent- and human-operable at the same time.
+    image: dsh-computer:bookworm
+    viewer: 6081:6080
+    state: persistent
+    cpus: 2
+    mem: 4g
+    shm: 1g
+
+  - id: shell
+    name: Scratch Shell
+    description: Minimal Debian to install anything into, with a home that persists between runs.
+    image: debian:bookworm-slim
+    state: persistent
+    cpus: 1
+    mem: 1g
+    shm: 256m
+    command: sleep infinity
+
+  - id: whoami
+    name: Whoami
+    description: Tiny HTTP echo service. It prints the exact request that reached it, which makes proxy path handling visible instead of assumed.
+    image: traefik/whoami:latest
+    web: 8090:80
+    cpus: 1
+    mem: 256m
+    shm: 64m
+
+  - id: nginx
+    name: Nginx (static)
+    description: Stock nginx welcome page — a real HTML dashboard with its own assets, for checking that a web UI renders and not just the text endpoint.
+    image: nginx:alpine
+    web: 8091:80
+    cpus: 1
+    mem: 128m
+    shm: 64m

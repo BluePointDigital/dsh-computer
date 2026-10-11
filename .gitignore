@@ -9,3 +9,7 @@
 # Per-install artifacts
 *.pre-*
 node_modules/
+
+# Per-install runtime state (VNC password, tickets) -- never commit.
+.state/
+**/.state/
