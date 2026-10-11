@@ -141,6 +141,16 @@ to confirm a window mapped before screenshotting.
   stale marker from the *previous* run. Probe X itself (`xdpyinfo`) rather than
   trusting that file alone — `box-desktop` started against a dead display exits
   **0** having done nothing.
+- **App state lived inside the package, so `pnpm install` deleted it.** `APPS_STATE`
+  defaults to `$SKILL_DIR/.state`, and `/data/skills/docker-computer` is a symlink
+  into `node_modules/dsh-applications` -- a pnpm-managed directory that any install
+  replaces *wholesale*. A routine v0.1.4 -> v0.1.5 upgrade wiped every
+  `<id>.vnc-password` with no error. The viewer kept enforcing the password it was
+  created with, the CLI reported `""`, and the GUI rendered a blank one. State now
+  defaults to `${DSH_HOME:-$HOME}/.dsh-applications`, and resolution falls back to
+  the **running container's `VNC_PASSWORD`** -- the daemon is the authority, the file
+  is only a cache -- so a lost cache self-heals instead of silently mismatching.
+  `test/apps-password.test.sh` covers the order. Never put state under `$SKILL_DIR`.
 - **Apps are ON DEMAND by default — that is now policy, not accident.** `autostart`
   is **false** unless a catalog entry says otherwise, so most containers deliberately
   do *not* return after a harness reboot; `computer apps up <id>` is how they come

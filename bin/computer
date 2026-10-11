@@ -447,7 +447,12 @@ cmd_boxes() {
 # drift out of sync; `apps list` is a view over `docker ps`, filtered by label.
 # ---------------------------------------------------------------------------
 APPS_FILE="${COMPUTER_APPS_FILE:-$SKILL_DIR/apps.yaml}"
-APPS_STATE="${COMPUTER_APPS_STATE:-$SKILL_DIR/.state}"
+# NOT under $SKILL_DIR. That path resolves through the skill symlink into a
+# pnpm-managed package directory, and `pnpm install` replaces it wholesale — so
+# the state silently vanished on a v0.1.4 -> v0.1.5 upgrade and surfaced as a
+# blank password in the GUI. State must outlive the package that reads it.
+APPS_STATE="${COMPUTER_APPS_STATE:-${DSH_HOME:-$HOME}/.dsh-applications}"
+APPS_STATE_LEGACY="$SKILL_DIR/.state"
 APPS_PREFIX="dsh-app"
 APPS_TABLE=""
 
@@ -536,11 +541,36 @@ app_exists()  { docker inspect "$(app_cname "$1")" >/dev/null 2>&1; }
 
 app_password_file() { printf '%s/%s.vnc-password' "$APPS_STATE" "$1"; }
 
+# The password the RUNNING viewer actually enforces. The container env is where
+# x11vnc reads it, so the daemon is the authority and the file is only a cache.
+app_running_password() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' \
+    "$(app_cname "$1")" 2>/dev/null | sed -n 's/^VNC_PASSWORD=//p' | head -n1
+}
+
+# Read-only resolution: never mints a credential, because a listing must not
+# create one. Recovers from the legacy path or the running container when the
+# cache is gone, and re-persists so the next lookup is a plain file read.
+app_viewer_password() {
+  local id="$1" f pw
+  f="$(app_password_file "$id")"
+  if [ -f "$f" ]; then cat "$f"; return 0; fi
+  local lf="$APPS_STATE_LEGACY/$id.vnc-password"
+  if [ -f "$lf" ]; then pw="$(cat "$lf")"; else pw="$(app_running_password "$id")"; fi
+  [ -n "$pw" ] || return 1
+  mkdir -p "$APPS_STATE"; printf '%s' "$pw" > "$f"; chmod 600 "$f"
+  printf '%s' "$pw"
+}
+
 app_vnc_password() {
   local id="$1" f; f="$(app_password_file "$id")"
   [ -f "$f" ] && { cat "$f"; return; }
   mkdir -p "$APPS_STATE"
-  local pw; pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10)"
+  # Recover before generating. Regenerating here would hand the GUI a password
+  # the already-running viewer does not accept — a silent mismatch, not an error.
+  local pw; pw="$(app_viewer_password "$id" 2>/dev/null)" || pw=""
+  [ -n "$pw" ] && { printf '%s' "$pw"; return; }
+  pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10)"
   printf '%s' "$pw" > "$f"; chmod 600 "$f"; printf '%s' "$pw"
 }
 
@@ -617,7 +647,7 @@ apps_list_json() {
       "$(json_escape "$img")" "$st" "$auto"
     if [ -n "$vw" ]; then
       url="$(app_viewer_url "$id" 2>/dev/null)" || url=""
-      pw="$(cat "$(app_password_file "$id")" 2>/dev/null)" || pw=""
+      pw="$(app_viewer_password "$id" 2>/dev/null)" || pw=""
       printf ',"viewer":{"hostPort":"%s","url":"%s","password":"%s"}' \
         "${vw%%:*}" "$(json_escape "$url")" "$(json_escape "$pw")"
     fi
@@ -869,8 +899,7 @@ cmd_apps_url() {
   local u
   u="$(app_viewer_url "$id")" || return 1
   printf '%s\n' "$u"
-  local f; f="$(app_password_file "$id")"
-  [ -f "$f" ] && printf 'password: %s\n' "$(cat "$f")"
+  local pw; pw="$(app_viewer_password "$id" 2>/dev/null)" && printf 'password: %s\n' "$pw"
   return 0
 }
 
@@ -913,7 +942,7 @@ COMPUTER_PUBLIC_URL so the URL handed to a human is the public one rather than
 the bind address.
 
 Env: COMPUTER_APPS_FILE (default <skill>/apps.yaml)
-     COMPUTER_APPS_STATE (default <skill>/.state)
+     COMPUTER_APPS_STATE (default $DSH_HOME/.dsh-applications)
      COMPUTER_BIND_IP (where viewers publish)
      COMPUTER_PUBLIC_URL (base URL viewers are advertised at)
      APPS_LOG_LINES (default 60)
