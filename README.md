@@ -22,18 +22,12 @@ under a profile's `node_modules/` is simultaneously a bundle (for the plugin) an
 cd /data/profiles/web
 pnpm add github:BluePointDigital/dsh-computer#v0.1.0
 
-# 2. Register it as a bundle so the plugin mounts and appears in the Plugins panel
-node -e '
-  const fs=require("fs"), p="package.json", d=JSON.parse(fs.readFileSync(p));
-  const b=d.dsh.profile.bundles; if(!b.includes("dsh-applications")) b.push("dsh-applications");
-  fs.writeFileSync(p, JSON.stringify(d,null,2)+"\n");'
-
-# 3. Build the box image (1.4 GB, from image/Dockerfile — not shipped as a binary)
-bin/computer build
-
-# 4. Verify end to end
-bin/install.sh verify
+# 2. Wire the rest: register the bundle, link the skill into the skill root,
+#    build the box image if absent, then verify the whole stack.
+bin/install.sh
 ```
+
+`bin/install.sh` is idempotent and safe to re-run.
 
 A restart is required after step 2: `dsh.profile.bundles` is the composition root, and
 `patchReload: live` covers only the patch layer (`cordis.patch.yml`), not the bundle list.
@@ -89,10 +83,13 @@ refuses to leave the plugin mounted twice.
 
 - **Verified:** the plugin mounts via the bundle form and appears in the Plugins panel; the box
   starts, serves its display, and runs commands; `bin/install.sh verify` passes.
-- **Not yet verified:** using this package's own root as a `customSkillDirs` skill root, so that a
-  git-dependency install alone surfaces `SKILL.md`. The discovery code accepts a loose `SKILL.md` at
-  a root, but this path has not been demonstrated end-to-end — until it is, `SKILL.md` should be
-  copied or symlinked into a skill root (`/data/skills/<name>/`).
+- **How the skill reaches the agent:** skills are found by scanning skill *roots*, and a profile's
+  `node_modules/` is not one — so a dependency install alone does not surface `SKILL.md`. The list of
+  roots *is* configurable (`customSkillDirs`), and discovery accepts a loose `SKILL.md` at a root, so
+  pointing it at this package would work — but that setting lives in the **agent preset** config
+  (`preset-cordis`), not the profile, so it is not a profile-level toggle. `bin/install.sh` therefore
+  links the package into the user skill root (`<dshHome>/skills/<skill-name>`), which every agent on
+  the host sees. `watchFollowSymlinks` defaults to true, so the link is watched like a real directory.
 - The image is **not** in this repository; build it from `image/Dockerfile`.
 
 ## License

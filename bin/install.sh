@@ -36,6 +36,10 @@ PLUGIN_DIR="$SKILL_DIR"
 IMAGE_DIR="$SKILL_DIR/image"
 IMAGE_TAG="dsh-computer:bookworm"
 PLUGIN_NAME="dsh-applications"
+# The skill's own name, from SKILL.md frontmatter -- this is the directory
+# name in the skill root, not the package name.
+SKILL_NAME="$(sed -n 's/^name:[[:space:]]*//p' "$SKILL_DIR/SKILL.md" | head -1 | tr -d '"' | tr -d "'")"
+SKILL_NAME="${SKILL_NAME:-docker-computer}"
 
 MODE="install"
 DSH_HOME="${DSH_HOME:-/data}"
@@ -169,6 +173,47 @@ fi
 if [ -L "$LINK" ] && [ ! -e "$LINK" ]; then
   bad "$PLUGIN_NAME is a DANGLING symlink -> $(readlink "$LINK")"
   FAILED=1
+fi
+
+# ------------------------------------------------- 2b. make the SKILL visible
+step "2b. Link the skill into a skill root"
+
+# The plugin and the skill ship in one package, but they are discovered by two
+# different subsystems. node_modules/ satisfies the first and not the second:
+# skills are found by scanning skill ROOTS, and a profile's node_modules is not
+# one. (The list of roots IS configurable -- `customSkillDirs` -- but it lives in
+# the agent PRESET config, not the profile, so it is not a profile-level toggle.)
+# So: link this package into the user skill root, which every agent on the host
+# sees. watchFollowSymlinks defaults to true, so the link is watched like a real
+# directory and edits to SKILL.md take effect without a restart.
+SKILL_ROOT="${DSH_HOME}/skills"
+SKILL_LINK="$SKILL_ROOT/$SKILL_NAME"
+
+if [ ! -d "$SKILL_ROOT" ]; then
+  warn "no skill root at $SKILL_ROOT -- skipping the skill link"
+  echo "       The plugin will mount, but the agent will not know the skill exists."
+elif [ "$(readlink -f "$SKILL_LINK" 2>/dev/null)" = "$(readlink -f "$PLUGIN_DIR")" ]; then
+  ok "skill already linked: $SKILL_LINK -> $PLUGIN_DIR"
+elif [ -e "$SKILL_LINK" ] && [ ! -L "$SKILL_LINK" ]; then
+  # A real directory here is a full copy, not our link. Overwriting it would
+  # destroy whatever the operator put there.
+  ok "a real skill directory already exists at $SKILL_LINK (left alone)"
+  echo "       It is not a link to this package; update it separately if you"
+  echo "       want this package's SKILL.md to be the one that loads."
+elif [ "$MODE" = "verify" ]; then
+  bad "skill not linked: $SKILL_LINK does not point at $PLUGIN_DIR"
+  echo "       The plugin mounts, but the agent cannot see SKILL.md."
+  FAILED=1
+else
+  [ -L "$SKILL_LINK" ] && rm -f "$SKILL_LINK"
+  REL_SKILL="$(realpath --relative-to="$SKILL_ROOT" "$PLUGIN_DIR")"
+  ln -s "$REL_SKILL" "$SKILL_LINK"
+  if [ "$(readlink -f "$SKILL_LINK")" = "$(readlink -f "$PLUGIN_DIR")" ]; then
+    ok "linked skill: $SKILL_LINK -> $REL_SKILL"
+  else
+    bad "created a skill link that does NOT resolve"
+    FAILED=1
+  fi
 fi
 
 # ----------------------------------------------------------------- 3. mount
