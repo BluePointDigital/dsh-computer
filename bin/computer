@@ -46,7 +46,18 @@ VNC_PW_FILE="$STATE_DIR/vnc-password"
 
 # Bind the viewer to the tailnet address when there is one, so it is reachable
 # from another device; loopback otherwise.
-BIND_IP="${COMPUTER_BIND_IP:-$(ip -4 -o addr show tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)}"
+#
+# `|| true` is load-bearing, not defensive noise. This script runs under
+# `set -euo pipefail` (line 6). When there is no tailnet -- a Tailscale-free
+# instance -- `ip ... show tailscale0` fails, and with pipefail that failure is
+# the pipeline's exit status, so `set -e` kills the script on THIS LINE. The
+# loopback fallback on the next line never runs, and EVERY subcommand dies with
+# no output at all: `computer apps` exits 1 silently and the Applications menu
+# renders empty while the catalog sits there intact.
+#
+# Found on 2026-10-11 deploying to a host with no tailnet; the intent to degrade
+# gracefully was already written here, and pipefail silently defeated it.
+BIND_IP="${COMPUTER_BIND_IP:-$(ip -4 -o addr show tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1 || true)}"
 BIND_IP="${BIND_IP:-127.0.0.1}"
 
 # Generate/reuse a VNC password. Empty string means no authentication.
