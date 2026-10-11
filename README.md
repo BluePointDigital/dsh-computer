@@ -20,7 +20,7 @@ under a profile's `node_modules/` is simultaneously a bundle (for the plugin) an
 ```bash
 # 1. Declare the dependency (pins a version)
 cd /data/profiles/web
-pnpm add github:BluePointDigital/dsh-computer#v0.1.0
+pnpm add github:BluePointDigital/dsh-computer#v0.1.2
 
 # 2. Wire the rest: register the bundle, link the skill into the skill root,
 #    build the box image if absent, then verify the whole stack.

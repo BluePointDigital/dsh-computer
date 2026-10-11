@@ -103,11 +103,24 @@ if [ "$CURRENT" = "__PARSE_ERROR__" ]; then
   bad "package.json is not valid JSON — refusing to edit"; exit 1
 fi
 
-WANT="link:$REL_PATH"
-if [ "$CURRENT" = "$WANT" ]; then
-  ok "already declared: $PLUGIN_NAME = $WANT"
+# Two declaration shapes are valid, and which one is right depends on delivery:
+#   link:PATH             local development -- node_modules/<name> is a symlink
+#                         into the working tree, so edits are live.
+#   github:OWNER/REPO#TAG distribution -- the package manager fetches a tarball
+#                         and node_modules/<name> is a real directory. This is
+#                         what an agent on another host should use.
+# Accepting only the link: form made a CORRECT git-dependency install report a
+# hard failure -- a false alarm is worse than no check, because it trains the
+# operator to ignore the result.
+WANT_LINK="link:$REL_PATH"
+if [ "$CURRENT" = "$WANT_LINK" ]; then
+  ok "already declared as a local link: $CURRENT"
+elif [ -n "$CURRENT" ] && [ "${CURRENT#link:}" = "$CURRENT" ]; then
+  ok "declared from a package source: $PLUGIN_NAME = $CURRENT"
 elif [ "$MODE" = "verify" ]; then
-  bad "declared as '${CURRENT:-<absent>}', expected '$WANT'"
+  bad "not declared as '$WANT_LINK' nor as a package specifier"
+  echo "       (a package specifier looks like github:OWNER/REPO#v1.0.0)"
+  echo "       currently: '${CURRENT:-<absent>}'"
   FAILED=1
 else
   cp -a "$PKG_JSON" "$PKG_JSON.pre-install-$(date +%Y%m%d-%H%M%S)"
@@ -115,12 +128,12 @@ else
     const fs=require('fs'), f='$PKG_JSON';
     const p=JSON.parse(fs.readFileSync(f,'utf8'));
     p.dependencies=p.dependencies||{};
-    p.dependencies['$PLUGIN_NAME']='$WANT';
+    p.dependencies['$PLUGIN_NAME']='$WANT_LINK';
     // Keep dependency keys sorted so re-running never churns the file.
     p.dependencies=Object.fromEntries(Object.keys(p.dependencies).sort().map(k=>[k,p.dependencies[k]]));
     fs.writeFileSync(f, JSON.stringify(p,null,2)+'\n');
   "
-  ok "declared $PLUGIN_NAME = $WANT   (backup written)"
+  ok "declared $PLUGIN_NAME = $WANT_LINK   (backup written)"
 fi
 
 # ----------------------------------------------------- 2. materialize the link
@@ -134,7 +147,7 @@ if [ "$MODE" = "install" ]; then
     # modules directory needs a full re-link -- which is what happened on
     # a second deployment, 2026-10-11. It aborts rather than proceeding, so nothing is
     # destroyed, but the dependency is never materialized.
-    ( cd "$PROFILE_DIR" && CI=true pnpm install --ignore-scripts >/tmp/dsh-install-pnpm.log 2>&1 ) \
+    ( cd "$PROFILE_DIR" && CI=true pnpm install --ignore-scripts --no-frozen-lockfile >/tmp/dsh-install-pnpm.log 2>&1 ) \
       && ok "pnpm install completed" \
       || { warn "pnpm install failed; see /tmp/dsh-install-pnpm.log"; }
   else
@@ -143,11 +156,27 @@ if [ "$MODE" = "install" ]; then
 fi
 
 # Fallback / assertion: ensure the symlink exists and points at our plugin.
+INSTALLED_NAME="$(node -e "
+  try { console.log(require('$LINK/package.json').name); } catch(e){ console.log(''); }" 2>/dev/null)"
 if [ -L "$LINK" ] && [ "$(readlink -f "$LINK")" = "$(readlink -f "$PLUGIN_DIR")" ]; then
-  ok "$PLUGIN_NAME -> $(readlink "$LINK") (symlink)"
+  ok "$PLUGIN_NAME -> $(readlink "$LINK") (symlink; local link: install)"
+elif [ -d "$LINK" ] && [ "$INSTALLED_NAME" = "$PLUGIN_NAME" ]; then
+  # A real directory means a package manager put it there. Confirm it is OUR
+  # package rather than trusting the directory name alone.
+  IV="$(node -e "
+    try { console.log(require('$LINK/package.json').version); } catch(e){ console.log('?'); }" 2>/dev/null)"
+  ok "$PLUGIN_NAME $IV installed from a package source (real directory)"
+  # The installed copy must carry its own bundle patch, or it mounts nothing.
+  if [ -f "$LINK/cordis.patch.yml" ]; then
+    ok "installed package carries cordis.patch.yml"
+  else
+    bad "installed package has no cordis.patch.yml -- nothing to mount"
+    FAILED=1
+  fi
 elif [ "$MODE" = "verify" ]; then
-  bad "$PLUGIN_NAME is not a symlink to $PLUGIN_DIR"
+  bad "$PLUGIN_NAME is neither a symlink to $PLUGIN_DIR nor an installed package at $LINK"
   [ -e "$LINK" ] && echo "       present as: $(stat -c %F "$LINK" 2>/dev/null) -> $(readlink -f "$LINK")"
+  [ -n "$INSTALLED_NAME" ] && echo "       package there is '$INSTALLED_NAME', not '$PLUGIN_NAME'"
   FAILED=1
 else
   mkdir -p "$PROFILE_DIR/node_modules"
