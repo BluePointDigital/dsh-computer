@@ -1,0 +1,949 @@
+#!/usr/bin/env bash
+# computer — manage a stateful Docker "computer" that the agent can keep between
+# tool calls, install software into, run a GUI on, and screenshot.
+#
+# Run `computer help` for the command surface.
+set -euo pipefail
+
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$BIN_DIR/.." && pwd)"
+
+# This skill is installed system-wide (/data/skills/docker-computer), so its own
+# path says nothing about which workspace invoked it. Resolve the workspace from
+# the CALLER's directory instead:
+#   1. explicit COMPUTER_WORKSPACE / DSH_WORKSPACE
+#   2. nearest ancestor of $PWD containing a .dsh marker (a DSH project root)
+#   3. $PWD
+# State lands in <workspace>/.dsh-computer so outputs stay inside the workspace
+# the agent's own file tools already operate on.
+resolve_workspace() {
+  if [ -n "${COMPUTER_WORKSPACE:-}" ]; then printf '%s' "$COMPUTER_WORKSPACE"; return; fi
+  if [ -n "${DSH_WORKSPACE:-}" ];     then printf '%s' "$DSH_WORKSPACE";     return; fi
+  local d="$PWD"
+  while [ "$d" != "/" ]; do
+    if [ -d "$d/.dsh" ]; then printf '%s' "$d"; return; fi
+    d="$(dirname "$d")"
+  done
+  printf '%s' "$PWD"
+}
+
+WORKSPACE="$(resolve_workspace)"
+
+STATE_DIR="$WORKSPACE/.dsh-computer"
+HOME_DIR="$STATE_DIR/home"
+OUT_DIR="$STATE_DIR/out"
+IMAGE="${COMPUTER_IMAGE:-dsh-computer:bookworm}"
+
+WS_HASH="$(printf '%s' "$WORKSPACE" | md5sum | cut -c1-8)"
+NAME="${COMPUTER_NAME:-dsh-computer-$WS_HASH}"
+
+CPUS="${COMPUTER_CPUS:-2}"
+MEM="${COMPUTER_MEM:-4g}"
+SHM="${COMPUTER_SHM:-1g}"
+GEO="${COMPUTER_GEOMETRY:-1440x900x24}"
+PORT="${COMPUTER_PORT:-6080}"
+VNC_PW_FILE="$STATE_DIR/vnc-password"
+
+# Bind the viewer to the tailnet address when there is one, so it is reachable
+# from another device; loopback otherwise.
+BIND_IP="${COMPUTER_BIND_IP:-$(ip -4 -o addr show tailscale0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)}"
+BIND_IP="${BIND_IP:-127.0.0.1}"
+
+# Generate/reuse a VNC password. Empty string means no authentication.
+vnc_password() {
+  [ "${1:-0}" = "1" ] && { printf ''; return; }
+  if [ -n "${COMPUTER_VNC_PASSWORD:-}" ]; then printf '%s' "$COMPUTER_VNC_PASSWORD"; return; fi
+  if [ -f "$VNC_PW_FILE" ]; then cat "$VNC_PW_FILE"; return; fi
+  local pw
+  pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10)"
+  printf '%s' "$pw" > "$VNC_PW_FILE"
+  chmod 600 "$VNC_PW_FILE"
+  printf '%s' "$pw"
+}
+
+# Created on demand by the commands that write, so `status` and `boxes` stay
+# read-only and do not litter a .dsh-computer/ into a workspace that never ran one.
+ensure_state() { mkdir -p "$HOME_DIR" "$OUT_DIR" "$HOME_DIR/_shots"; }
+
+log()  { printf '%s\n' "$*" >&2; }
+die()  { printf 'computer: %s\n' "$*" >&2; exit 1; }
+
+running() { [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)" = "true" ]; }
+exists()  { docker inspect "$NAME" >/dev/null 2>&1; }
+
+need_running() {
+  running || die "container '$NAME' is not running — run: computer up"
+}
+
+image_present() { docker image inspect "$IMAGE" >/dev/null 2>&1; }
+
+cmd_build() {
+  log "building $IMAGE from $SKILL_DIR/image"
+  docker build -t "$IMAGE" "$SKILL_DIR/image"
+  log "built $IMAGE"
+}
+
+cmd_up() {
+  local desktop=0 offline=0 nopw=0 pw=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --desktop)     desktop=1 ;;
+      --offline)     offline=1 ;;
+      --no-password) nopw=1 ;;
+      --cpus)    CPUS="${2:?}"; shift ;;
+      --mem)     MEM="${2:?}"; shift ;;
+      --geometry) GEO="${2:?}"; shift ;;
+      --port)    PORT="${2:?}"; shift ;;
+      *) die "unknown flag for up: $1" ;;
+    esac
+    shift
+  done
+
+  image_present || cmd_build
+  ensure_state
+  [ "$desktop" = "1" ] && pw="$(vnc_password "$nopw")"
+
+  if running; then
+    log "already running: $NAME"
+  elif exists; then
+    log "starting existing container: $NAME"
+    docker start "$NAME" >/dev/null
+  else
+    local net="bridge"
+    [ "$offline" = "1" ] && net="none"
+    local extra=()
+    if [ "$desktop" = "1" ]; then
+      # Desktop mode = the SAME box, plus a viewer. Bind loopback as well as the
+      # tailnet address so it is reachable both through a port-forward and
+      # directly over the tailnet.
+      extra=(-e VNC_PASSWORD="$pw" -p "127.0.0.1:${PORT}:6080")
+      [ "$BIND_IP" != "127.0.0.1" ] && extra+=(-p "${BIND_IP}:${PORT}:6080")
+      log "starting DESKTOP computer ($IMAGE) net=$net viewer=http://${BIND_IP}:${PORT}/vnc.html"
+    else
+      log "starting headless computer ($IMAGE) net=$net cpus=$CPUS mem=$MEM"
+    fi
+    docker run -d --name "$NAME" \
+      --cpus "$CPUS" --memory "$MEM" --shm-size="$SHM" \
+      --network "$net" \
+      -e SCREEN_GEOMETRY="$GEO" \
+      -v "$HOME_DIR:/home/agent" \
+      -v "$OUT_DIR:/out" \
+      "${extra[@]}" \
+      "$IMAGE" >/dev/null
+  fi
+
+  # Wait for the display to report ready.
+  for _ in $(seq 1 60); do
+    if docker exec "$NAME" cat /tmp/.computer-ready 2>/dev/null | grep -q ready; then break; fi
+    sleep 0.25
+  done
+
+  # Start the viewer on every `up`, so a restarted container gets VNC back.
+  if [ "$desktop" = "1" ]; then
+    docker exec "$NAME" box-desktop || log "WARNING: box-desktop failed — see /tmp/x11vnc.log"
+    echo "  viewer    : http://${BIND_IP}:${PORT}/vnc.html"
+    [ "$BIND_IP" != "127.0.0.1" ] && echo "  viewer    : http://127.0.0.1:${PORT}/vnc.html   (via port-forward)"
+    if [ -n "$pw" ]; then echo "  password  : $pw"; else echo "  password  : (none)"; fi
+  fi
+  cmd_status
+}
+
+cmd_status() {
+  if ! exists; then
+    echo "container : $NAME (absent)"
+    echo "workspace : $WORKSPACE"
+    echo "home      : $HOME_DIR"
+    return 0
+  fi
+  local st
+  st="$(docker inspect -f '{{.State.Status}}' "$NAME")"
+  echo "container : $NAME ($st)"
+  echo "workspace : $WORKSPACE"
+  echo "image     : $(docker inspect -f '{{.Config.Image}}' "$NAME")"
+  echo "home      : $HOME_DIR  ($(du -sh "$HOME_DIR" 2>/dev/null | cut -f1))"
+  echo "out       : $OUT_DIR"
+  if [ "$st" = "running" ]; then
+    echo "display   : $(docker exec "$NAME" sh -c 'xdpyinfo 2>/dev/null | awk "/dimensions/{print \$2; exit}"' 2>/dev/null || echo unknown)"
+    echo "ready     : $(docker exec "$NAME" cat /tmp/.computer-ready 2>/dev/null || echo '(none)')"
+    local ports; ports="$(docker port "$NAME" 2>/dev/null | tr '\n' ' ')"
+    [ -n "$ports" ] && echo "ports     : $ports"
+    if docker exec "$NAME" pgrep -x x11vnc >/dev/null 2>&1; then
+      echo "viewer    : http://${BIND_IP}:${PORT}/vnc.html  (VNC up)"
+    fi
+  fi
+}
+
+cmd_exec() {
+  need_running
+  [ $# -gt 0 ] || die "exec needs a command"
+  docker exec -i -w /home/agent "$NAME" bash -lc "$*"
+}
+
+cmd_sh() {
+  need_running
+  docker exec -i -w /home/agent "$NAME" bash
+}
+
+cmd_put() {
+  need_running
+  [ $# -eq 2 ] || die "put needs <host-path> <box-path>"
+  docker cp "$1" "$NAME:$2"
+}
+
+cmd_get() {
+  need_running
+  [ $# -eq 2 ] || die "get needs <box-path> <host-path>"
+  docker cp "$NAME:$1" "$2"
+}
+
+cmd_shot() {
+  need_running
+  ensure_state
+  local out="${1:-shot-$(date +%Y%m%d-%H%M%S).png}"
+  case "$out" in /*) ;; *) out="/home/agent/_shots/$out" ;; esac
+  docker exec "$NAME" import -window root "$out"
+  local host="$HOME_DIR/_shots/$(basename "$out")"
+  [ -f "$host" ] || die "screenshot was not created at $host"
+  log "screenshot: $host  ($(du -h "$host" | cut -f1))"
+  printf '%s\n' "$host"
+}
+
+cmd_click() {
+  need_running
+  [ $# -ge 2 ] || die "click needs <x> <y> [button]"
+  docker exec "$NAME" xdotool mousemove "$1" "$2" click "${3:-1}"
+  log "clicked $1,$2 button ${3:-1}"
+}
+
+cmd_type() {
+  need_running
+  [ $# -ge 1 ] || die "type needs <text>"
+  docker exec "$NAME" xdotool type --delay 30 -- "$1"
+  log "typed ${#1} chars"
+}
+
+cmd_key() {
+  need_running
+  [ $# -ge 1 ] || die "key needs <keysym> (e.g. Return, ctrl+l)"
+  docker exec "$NAME" xdotool key "$1"
+  log "key $1"
+}
+
+cmd_windows() {
+  need_running
+  docker exec "$NAME" bash -lc \
+    'for w in $(xdotool search --onlyvisible --name "." 2>/dev/null); do
+       printf "%s  %s\n" "$w" "$(xdotool getwindowname "$w" 2>/dev/null)"
+     done' || log "(no windows)"
+}
+
+cmd_ps() {
+  need_running
+  docker exec "$NAME" ps -eo pid,user,comm --sort=pid
+}
+
+cmd_log() {
+  exists || die "container '$NAME' does not exist"
+  docker logs --tail "${1:-50}" "$NAME"
+}
+
+cmd_down() {
+  exists || { log "no container '$NAME'"; return 0; }
+  docker stop "$NAME" >/dev/null
+  log "stopped (home preserved at $HOME_DIR)"
+}
+
+cmd_destroy() {
+  exists || { log "no container '$NAME'"; return 0; }
+  docker rm -f "$NAME" >/dev/null
+  log "removed container; home preserved at $HOME_DIR"
+}
+
+# --- CDP: element-level control -------------------------------------------
+# `click <x> <y>` is pixel-based: it has no idea what it is clicking, so a
+# layout shift or a late paint hits the wrong element and fails SILENTLY.
+# These commands address elements by role/name/text over the DevTools Protocol
+# instead, against the same browser the human watches over VNC.
+#
+# The endpoint stays on loopback INSIDE the box — no new published port.
+CDP_PORT="${COMPUTER_CDP_PORT:-9222}"
+
+cdp_ready() {
+  docker exec "$NAME" curl -s --max-time 3 \
+    "http://127.0.0.1:$CDP_PORT/json/version" >/dev/null 2>&1
+}
+
+need_cdp_client() {
+  docker exec "$NAME" test -d /home/agent/.cdp/node_modules/playwright-core 2>/dev/null \
+    || die "playwright-core is not installed in the box — run: computer cdp setup"
+}
+
+cmd_cdp() {
+  need_running
+  ensure_state
+  # Default is READ-ONLY. `computer cdp --write <cmd>` (or COMPUTER_CDP_ALLOW_WRITE=1)
+  # unlocks the mutating commands; the box re-checks this itself.
+  local allow_write="${COMPUTER_CDP_ALLOW_WRITE:-0}"
+  if [ "${1:-}" = "--write" ]; then allow_write=1; shift; fi
+  local sub="${1:-help}"
+  [ $# -gt 0 ] && shift
+
+  case "$sub" in
+    setup)
+      # playwright-core needs Node 20+ and Debian bookworm ships 18, so a current
+      # LTS Node goes into /usr/local first. /usr/local is NOT the bind mount, so
+      # this is per-container — re-run `cdp setup` after a recreate. Idempotent.
+      # playwright-core drives the Chromium already in the image, so no second
+      # browser is downloaded; it lands in the home mount and does persist.
+      log "provisioning the CDP client inside the box"
+      docker exec "$NAME" bash -lc '
+        set -e
+        major=$(node --version 2>/dev/null | sed "s/^v//; s/\..*//") || major=0
+        [ -n "$major" ] || major=0
+        if [ "$major" -lt 20 ]; then
+          ver=$(curl -s https://nodejs.org/dist/index.json | jq -r "[.[] | select(.lts != false)][0].version")
+          echo "  node $(node --version 2>/dev/null || echo none) is too old; installing $ver"
+          curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/$ver/node-$ver-linux-x64.tar.xz"
+          sudo tar -xJ -C /usr/local --strip-components=1 -f /tmp/node.tar.xz
+          rm -f /tmp/node.tar.xz
+        fi
+        echo "  node: $(node --version)"
+        mkdir -p "$HOME/.cdp" && cd "$HOME/.cdp"
+        [ -f package.json ] || npm init -y >/dev/null 2>&1
+        npm install playwright-core --no-audit --no-fund 2>&1 | tail -1'
+      ;;
+
+    start)
+      # Self-heal: a recreated container loses /usr/local's Node but keeps the
+      # home mount, so provision on demand rather than failing with a confusing
+      # error later.
+      need_cdp_client 2>/dev/null || cmd_cdp setup
+      log "relaunching Chromium with CDP on :$CDP_PORT"
+      docker exec "$NAME" bash -lc "
+        pkill -x chromium 2>/dev/null; sleep 1
+        BOX_CHROME_CDP_PORT=$CDP_PORT nohup box-chrome >/tmp/chrome.log 2>&1 &
+        for _ in \$(seq 1 60); do
+          curl -s --max-time 1 http://127.0.0.1:$CDP_PORT/json/version >/dev/null 2>&1 && break
+          sleep 0.25
+        done
+        curl -s --max-time 3 http://127.0.0.1:$CDP_PORT/json/version \
+          | tr ',' '\n' | grep -E '\"Browser\"|webSocketDebuggerUrl' | tr -d '\" '"
+      cdp_ready || die "CDP did not come up on :$CDP_PORT — see: computer cdp log"
+      echo "  endpoint  : http://127.0.0.1:$CDP_PORT (inside the box only)"
+      echo "  next      : computer cdp setup   (once), then e.g. computer cdp snapshot"
+      ;;
+
+    log)
+      docker exec "$NAME" tail -n "${1:-20}" /tmp/chrome.log
+      ;;
+
+    help|-h|--help)
+      docker exec "$NAME" bash -lc 'true' 2>/dev/null || true
+      cat <<'EOF'
+cdp — element-level browser control (replaces coordinate clicking)
+
+  Reads are free. Mutating commands need `--write`.
+
+  cdp setup                   install playwright-core in the box (once)
+  cdp start                   relaunch Chromium with CDP (opt-in per launch)
+  cdp log [n]                 Chromium's log
+
+  READ-ONLY
+  cdp snapshot [selector]     ARIA tree: roles + accessible names. Start here.
+  cdp rows [selector]         table rows as pipe-delimited text
+  cdp text    [selector]      innerText
+  cdp links                   link text -> href
+  cdp net [substring]         XHR/fetch the page made (status, ms, url)
+  cdp wait    <selector>      wait for an element
+  cdp goto <url> | url | back | tabs | new [url]
+
+  MUTATING — add --write
+  cdp --write click <selector>     e.g. 'role=button[name="Sign in"]'
+  cdp --write fill  <selector> <t>
+  cdp --write press <key>
+  cdp --write eval  <js>
+EOF
+      ;;
+
+    *)
+      cdp_ready || die "no CDP endpoint on :$CDP_PORT — run: computer cdp start"
+      need_cdp_client
+      docker exec "$NAME" mkdir -p /home/agent/.cdp
+      docker cp "$SKILL_DIR/image/box-cdp.mjs" "$NAME:/home/agent/.cdp/cdp.mjs" >/dev/null
+      local -a WENV=()
+      [ "$allow_write" = "1" ] && WENV=(-e BOX_CDP_ALLOW_WRITE=1)
+      docker exec "${WENV[@]}" "$NAME" node /home/agent/.cdp/cdp.mjs "$sub" "$@"
+      ;;
+  esac
+}
+
+# List every box this skill has created, across every workspace, including
+# stopped ones. The owning workspace is recovered from the /home/agent bind
+# mount, so this works even when invoked from somewhere unrelated.
+cmd_boxes() {
+  local names
+  names="$(docker ps -a --filter 'name=^/dsh-computer-' --format '{{.Names}}' | sort)"
+  if [ -z "$names" ]; then
+    echo "no dsh-computer containers"
+  else
+    printf '%-24s %-9s %-30s %s\n' "CONTAINER" "STATE" "WORKSPACE" "HOME (size)"
+    local n st home ws size
+    for n in $names; do
+      st="$(docker inspect -f '{{.State.Status}}' "$n" 2>/dev/null)"
+      home="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/home/agent"}}{{.Source}}{{end}}{{end}}' "$n" 2>/dev/null)"
+      if [ -n "$home" ]; then
+        ws="$(dirname "$(dirname "$home")")"   # <ws>/.dsh-computer/home -> <ws>
+        size="$(du -sh "$home" 2>/dev/null | cut -f1)"
+      else
+        ws="-"; size="-"
+      fi
+      printf '%-24s %-9s %-30s %s (%s)\n' "$n" "$st" "$ws" "${home:-none}" "$size"
+    done
+  fi
+  echo
+  local isz
+  isz="$(docker image inspect -f '{{.Size}}' "$IMAGE" 2>/dev/null)"
+  if [ -n "$isz" ]; then
+    echo "image: $IMAGE  $(awk -v b="$isz" 'BEGIN{printf "%.2f GB", b/1e9}')  (one image, shared by every box)"
+  else
+    echo "image: $IMAGE  (not built)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# apps — the machine-level application catalog.
+#
+# Deliberately NOT workspace-scoped like the rest of this script. Which
+# applications exist and which are running is a property of the MACHINE, not of
+# one project — so the catalog lives beside the skill and per-app state lives in
+# Docker, which is the registry of record. There is no second state file to
+# drift out of sync; `apps list` is a view over `docker ps`, filtered by label.
+# ---------------------------------------------------------------------------
+APPS_FILE="${COMPUTER_APPS_FILE:-$SKILL_DIR/apps.yaml}"
+APPS_STATE="${COMPUTER_APPS_STATE:-$SKILL_DIR/.state}"
+APPS_PREFIX="dsh-app"
+APPS_TABLE=""
+
+# Strict reader for the flat two-level subset of YAML the catalog uses.
+# Fail-closed: unknown syntax is an error, never silently ignored, because this
+# file is an allowlist. Emits TAB-separated `id <TAB> key <TAB> value` rows.
+apps_parse() {
+  awk -v f="$APPS_FILE" '
+    function trim(s) { gsub(/^[ \t]+/,"",s); gsub(/[ \t]+$/,"",s); gsub(/^"|"$/,"",s); return s }
+    function err(m) { printf("computer: %s: %s\n", f, m) > "/dev/stderr"; bad=1 }
+    BEGIN { cur=""; in_apps=0; bad=0 }
+    {
+      line=$0
+      sub(/\r$/,"",line)
+      sub(/#.*/,"",line)
+      line=trim(line)
+      if (line=="") next
+      if (line=="apps:") { in_apps=1; next }
+      if (!in_apps) {
+        if (line ~ /^[A-Za-z_][A-Za-z0-9_]*:/) next
+        err("unexpected content before apps: -> " line); next
+      }
+      if (line ~ /^-/) {
+        rest=trim(substr(line,2))
+        i=index(rest,":")
+        if (i==0) { err("list item is not key: value -> " rest); next }
+        key=trim(substr(rest,1,i-1)); val=trim(substr(rest,i+1))
+        if (key=="id") cur=val
+        if (cur=="") { err("entry has no id: -> " rest); next }
+        print cur "\t" key "\t" val
+        next
+      }
+      i=index(line,":")
+      if (i==0) { err("not key: value -> " line); next }
+      key=trim(substr(line,1,i-1)); val=trim(substr(line,i+1))
+      if (cur=="") { err("key outside an entry -> " line); next }
+      print cur "\t" key "\t" val
+    }
+    END { if (bad) exit 1 }
+  ' "$APPS_FILE"
+}
+
+apps_load() {
+  if [ -z "$APPS_TABLE" ]; then
+    [ -f "$APPS_FILE" ] || die "no app catalog at $APPS_FILE"
+    APPS_TABLE="$(apps_parse)" || die "app catalog is malformed: $APPS_FILE"
+    [ -n "$APPS_TABLE" ] || die "app catalog defines no apps: $APPS_FILE"
+    apps_validate
+  fi
+}
+
+# Validate every catalog value the launcher interprets, HERE in the main shell.
+#
+# This must not be delegated to the reader functions. `app_restart_policy` is
+# called inside "$(...)", and a `die` in a command substitution exits only the
+# SUBSHELL: the caller just sees empty output, treats it as "field absent", and
+# falls back to the default. That is not hypothetical — the first version of this
+# did exactly that, printing the error and then cheerfully reporting
+# `autostart: false` with exit status 0. Validating once, up front, is what makes
+# a typo fail the command instead of quietly choosing a policy nobody asked for.
+apps_validate() {
+  local id auto
+  for id in $(app_ids); do
+    auto="$(app_field "$id" autostart)"
+    case "$auto" in
+      ''|true|yes|1|false|no|0) ;;
+      *) die "app '$id': autostart must be true or false (got '$auto')" ;;
+    esac
+  done
+}
+
+app_ids() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' '$2=="id"{print $3}'; }
+app_field() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' -v i="$1" -v k="$2" '$1==i && $2==k {print $3; exit}'; }
+
+app_require() {
+  local id="${1:-}"
+  apps_load
+  [ -n "$id" ] || die "usage: computer apps <list|up|down|rm|status|logs|url|discover> [app-id]"
+  printf '%s\n' "$(app_ids)" | grep -qx -- "$id" \
+    || die "unknown app '$id' — run: computer apps list"
+}
+
+app_cname()   { printf '%s-%s' "$APPS_PREFIX" "$1"; }
+app_running() { [ "$(docker inspect -f '{{.State.Running}}' "$(app_cname "$1")" 2>/dev/null || echo false)" = "true" ]; }
+app_exists()  { docker inspect "$(app_cname "$1")" >/dev/null 2>&1; }
+
+app_password_file() { printf '%s/%s.vnc-password' "$APPS_STATE" "$1"; }
+
+app_vnc_password() {
+  local id="$1" f; f="$(app_password_file "$id")"
+  [ -f "$f" ] && { cat "$f"; return; }
+  mkdir -p "$APPS_STATE"
+  local pw; pw="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10)"
+  printf '%s' "$pw" > "$f"; chmod 600 "$f"; printf '%s' "$pw"
+}
+
+app_viewer_url() {
+  local v; v="$(app_field "$1" viewer)"
+  [ -n "$v" ] || return 1
+  printf 'http://%s:%s/vnc.html?autoconnect=1&resize=scale' "$BIND_IP" "${v%%:*}"
+}
+
+# The published fallback URL for an HTTP dashboard (the same-origin proxy path
+# is /apps/web/<id>/ and takes precedence in the GUI when it is available).
+app_web_url() {
+  local w; w="$(app_field "$1" web)"
+  [ -n "$w" ] || return 1
+  printf 'http://%s:%s/' "$BIND_IP" "${w%%:*}"
+}
+
+# Restart policy is catalog-driven and the DEFAULT IS ON-DEMAND.
+# A container that resurrects itself after a harness reboot is the exception, not
+# the rule: `autostart: true` opts one in deliberately. The value is validated
+# fail-closed — a typo like `autostart: yes-please` is an error, never a silent
+# fallback to a policy nobody chose.
+app_restart_policy() {
+  local auto; auto="$(app_field "$1" autostart)"
+  case "$auto" in
+    '')                 printf 'no' ;;
+    true|yes|1)         printf 'unless-stopped' ;;
+    false|no|0)         printf 'no' ;;
+    *) die "app '$1': autostart must be true or false (got '$auto')" ;;
+  esac
+}
+
+# Apply the catalog's policy to a container that already exists. Without this the
+# policy would only ever bind at creation, so editing `autostart` in the catalog
+# would appear to do nothing — the worst kind of quiet wrongness.
+app_sync_restart() {
+  local id="$1" name="$2" want
+  want="$(app_restart_policy "$id")" || return 0
+  docker update --restart="$want" "$name" >/dev/null 2>&1 \
+    || log "WARNING: could not set restart=$want on $name"
+  return 0
+}
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"; s="${s//$'\t'/\\t}"; s="${s//$'\r'/\\r}"
+  printf '%s' "$s"
+}
+
+# Machine-readable catalog + state: the contract the GUI's /apps/api route serves.
+apps_list_json() {
+  local first=1 id nm ds img st vw web wcp wmode url wurl pw auto
+  printf '{"ok":true,"apps":['
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    nm="$(app_field "$id" name)"; nm="${nm:-$id}"
+    ds="$(app_field "$id" description)"
+    img="$(app_field "$id" image)"; vw="$(app_field "$id" viewer)"
+    web="$(app_field "$id" web)"
+    if [ "$(app_restart_policy "$id")" = "unless-stopped" ]; then auto=true; else auto=false; fi
+    if   app_running "$id"; then st="running"
+    elif app_exists  "$id"; then st="stopped"
+    else                         st="new"; fi
+    [ "$first" = "1" ] || printf ','
+    first=0
+    printf '{"id":"%s","name":"%s","description":"%s","image":"%s","state":"%s","autostart":%s' \
+      "$(json_escape "$id")" "$(json_escape "$nm")" "$(json_escape "$ds")" \
+      "$(json_escape "$img")" "$st" "$auto"
+    if [ -n "$vw" ]; then
+      url="$(app_viewer_url "$id" 2>/dev/null)" || url=""
+      pw="$(cat "$(app_password_file "$id")" 2>/dev/null)" || pw=""
+      printf ',"viewer":{"hostPort":"%s","url":"%s","password":"%s"}' \
+        "${vw%%:*}" "$(json_escape "$url")" "$(json_escape "$pw")"
+    fi
+    # `path` is the same-origin proxy mount the GUI prefers; `url` is the
+    # published origin. `mode: direct` tells the GUI to embed the published
+    # origin instead — needed by dashboards that open WebSockets, because the
+    # host webserver matches upgrade routes by EXACT pathname only, so no
+    # generic prefix upgrade proxy is possible.
+    if [ -n "$web" ]; then
+      wurl="$(app_web_url "$id" 2>/dev/null)" || wurl=""
+      wcp="${web##*:}"; [ "$wcp" = "$web" ] && wcp=80
+      wmode="$(app_field "$id" webMode)"; wmode="${wmode:-proxy}"
+      printf ',"web":{"hostPort":"%s","containerPort":"%s","url":"%s","path":"/apps/web/%s/","mode":"%s"}' \
+        "${web%%:*}" "$wcp" "$(json_escape "$wurl")" "$(json_escape "$id")" "$(json_escape "$wmode")"
+    fi
+    printf '}'
+  done <<<"$(app_ids)"
+  printf ']}\n'
+}
+
+cmd_apps_list() {
+  apps_load
+  [ "${1:-}" = "--json" ] && { apps_list_json; return 0; }
+  printf '%-9s %-16s %-8s %-9s %s\n' ID NAME STATE PORT IMAGE
+  local id nm img st vw web
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    nm="$(app_field "$id" name)"; nm="${nm:-$id}"
+    img="$(app_field "$id" image)"
+    vw="$(app_field "$id" viewer)"; web="$(app_field "$id" web)"
+    if   [ -n "$vw" ];  then vw="v:${vw%%:*}"
+    elif [ -n "$web" ]; then vw="w:${web%%:*}"
+    else                     vw="-"; fi
+    if   app_running "$id"; then st="running"
+    elif app_exists  "$id"; then st="stopped"
+    else                         st="new"; fi
+    printf '%-9s %-16s %-8s %-9s %s\n' "$id" "$nm" "$st" "$vw" "$img"
+  done <<<"$(app_ids)"
+}
+
+# The image brings up X but NOT the viewer — `box-desktop` is a second step. So
+# `docker start` returns with the port published and NOTHING listening: healthy
+# container, dead viewer, and the published port looks fine. Every path that
+# leaves the container running must pass through here.
+#
+# `box-desktop` restarts cleanly (it pkills any previous x11vnc/websockify
+# first), so calling it twice is harmless — but a viewer already serving is left
+# alone, so an idempotent `up` does not blip a live session.
+app_ensure_viewer() {
+  local id="$1" name="$2" viewer cp hex
+  viewer="$(app_field "$id" viewer)"
+  [ -n "$viewer" ] || return 0
+  cp="${viewer##*:}"; [ "$cp" = "$viewer" ] && cp=6080
+  hex="$(printf '%04X' "$cp" 2>/dev/null || true)"
+
+  local i
+
+  # Wait for X to GENUINELY answer before touching the viewer. Do NOT trust
+  # /tmp/.computer-ready on its own: /tmp survives docker stop/start, so a
+  # marker from the previous run can be read before this run's entrypoint has
+  # brought X up — and `box-desktop` against a dead display exits 0 having done
+  # nothing at all, which reads exactly like success.
+  for i in $(seq 1 80); do
+    if docker exec "$name" sh -lc 'if command -v xdpyinfo >/dev/null 2>&1; then xdpyinfo >/dev/null 2>&1; else grep -q ready /tmp/.computer-ready 2>/dev/null; fi'; then
+      break
+    fi
+    sleep 0.25
+  done
+
+  # Already listening? Read /proc/net/tcp rather than shelling out: this image
+  # ships NEITHER `ss` nor `netstat` (verified: `command -v ss` exits 127), and
+  # a missing detector degrades silently into restarting a LIVE viewer on every
+  # `up`, dropping the session. /proc/net/tcp is always present; 6080 -> 17C0.
+  if [ -n "$hex" ] \
+    && docker exec "$name" sh -lc "grep -qiE ':${hex}[[:space:]]' /proc/net/tcp /proc/net/tcp6 2>/dev/null"; then
+    log "viewer already serving in $name"
+    return 0
+  fi
+
+  docker exec "$name" box-desktop >/dev/null 2>&1 \
+    || log "WARNING: box-desktop failed in $name — check /tmp/x11vnc.log inside it"
+
+  # Do not return until it is actually accepting connections. `up` prints a URL;
+  # a URL that fails for two seconds is precisely the quiet wrongness this skill
+  # exists to avoid, and it is indistinguishable from "the app is broken".
+  for i in $(seq 1 60); do
+    if [ -n "$hex" ] \
+      && docker exec "$name" sh -lc "grep -qiE ':${hex}[[:space:]]' /proc/net/tcp /proc/net/tcp6 2>/dev/null"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  log "WARNING: viewer did not come up in $name — check /tmp/x11vnc.log inside it"
+  return 0
+}
+
+cmd_apps_up() {
+  local id="${1:-}"; app_require "$id"
+  local image; image="$(app_field "$id" image)"
+  [ -n "$image" ] || die "app '$id' has no image: field"
+  docker image inspect "$image" >/dev/null 2>&1 \
+    || die "image '$image' is not present locally — pull it first:
+  docker pull $image"
+
+  local name; name="$(app_cname "$id")"
+  if app_running "$id"; then
+    log "already running: $name"
+    app_sync_restart "$id" "$name"
+    app_ensure_viewer "$id" "$name"
+    cmd_apps_url "$id" || true
+    return 0
+  fi
+  if app_exists "$id"; then
+    docker start "$name" >/dev/null
+    log "started: $name"
+    app_sync_restart "$id" "$name"
+    app_ensure_viewer "$id" "$name"
+    cmd_apps_url "$id" || true
+    return 0
+  fi
+
+  local cpus mem shm cmd state viewer web restart
+  cpus="$(app_field "$id" cpus)"; cpus="${cpus:-2}"
+  mem="$(app_field "$id"  mem)";  mem="${mem:-4g}"
+  shm="$(app_field "$id"  shm)";  shm="${shm:-1g}"
+  cmd="$(app_field "$id" command)"
+  state="$(app_field "$id" state)"
+  viewer="$(app_field "$id" viewer)"
+  web="$(app_field "$id" web)"
+  restart="$(app_restart_policy "$id")"
+
+  # The fixed option set. Nothing here comes from the caller, and the catalog
+  # schema has no field for privileged / host networking / capabilities /
+  # devices, so those are not merely refused — they are unrepresentable.
+  local -a a=(run -d --name "$name"
+    --label "dsh.apps.managed=1" --label "dsh.apps.id=$id"
+    --security-opt no-new-privileges
+    --pids-limit 2048
+    --cpus "$cpus" --memory "$mem" --shm-size "$shm"
+    --restart "$restart")
+
+  # Persistent state is a named volume. A host path is not expressible.
+  [ "$state" = "persistent" ] && a+=(-v "${APPS_PREFIX}-${id}-home:/home/agent")
+
+  if [ -n "$viewer" ]; then
+    local hp cp geo; hp="${viewer%%:*}"; cp="${viewer##*:}"
+    [ "$cp" = "$viewer" ] && cp=6080
+    geo="$(app_field "$id" geometry)"; geo="${geo:-$GEO}"
+    a+=(-e "VNC_PASSWORD=$(app_vnc_password "$id")")
+    a+=(-e "SCREEN_GEOMETRY=$geo")
+    # Loopback + tailnet only. Never 0.0.0.0.
+    a+=(-p "127.0.0.1:${hp}:${cp}")
+    [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${hp}:${cp}")
+  fi
+
+  # An HTTP dashboard. Published on loopback + tailnet as the FALLBACK, so the
+  # panel still works when the same-origin /apps/web proxy route is not
+  # available. Loopback + tailnet only — never 0.0.0.0.
+  if [ -n "$web" ]; then
+    local whp wcp; whp="${web%%:*}"; wcp="${web##*:}"
+    [ "$wcp" = "$web" ] && wcp=80
+    a+=(-p "127.0.0.1:${whp}:${wcp}")
+    [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${whp}:${wcp}")
+  fi
+
+  a+=("$image")
+  [ -n "$cmd" ] && a+=(sh -lc "$cmd")
+
+  local out
+  out="$(docker "${a[@]}" 2>&1)" || die "launch failed: $out"
+  log "launched: $name"
+
+  app_ensure_viewer "$id" "$name"
+  [ -n "$viewer" ] || log "app '$id' has no viewer"
+
+  cmd_apps_url "$id" || true
+}
+
+cmd_apps_exec() {
+  local id="${1:-}"; app_require "$id"; shift
+  [ $# -gt 0 ] || die "usage: computer apps exec <app-id> <command...>"
+  app_running "$id" || die "app '$id' is not running — run: computer apps up $id"
+  docker exec -i "$(app_cname "$id")" "$@"
+}
+
+cmd_apps_down() {
+  local id="${1:-}"; app_require "$id"
+  app_exists "$id" || { log "not created: $(app_cname "$id")"; return 0; }
+  docker stop "$(app_cname "$id")" >/dev/null
+  log "stopped: $(app_cname "$id")"
+}
+
+cmd_apps_rm() {
+  local id="${1:-}"; app_require "$id"
+  app_exists "$id" || { log "not created: $(app_cname "$id")"; return 0; }
+  docker rm -f "$(app_cname "$id")" >/dev/null
+  log "removed: $(app_cname "$id")  (state volume ${APPS_PREFIX}-${id}-home kept)"
+}
+
+# Prints the EFFECTIVE posture from the daemon, not what we intended to pass —
+# so a drift between the two is visible rather than assumed away.
+cmd_apps_status() {
+  local id="${1:-}"; app_require "$id"
+  local n; n="$(app_cname "$id")"
+  echo "app:        $id  ($(app_field "$id" name))"
+  if ! app_exists "$id"; then
+    echo "container:  $n (not created)"
+    echo "image:      $(app_field "$id" image)"
+    return 0
+  fi
+  docker inspect -f 'container:  {{.Name}}
+state:      {{.State.Status}}
+image:      {{.Config.Image}}
+restart:    {{.HostConfig.RestartPolicy.Name}}
+privileged: {{.HostConfig.Privileged}}
+network:    {{.HostConfig.NetworkMode}}
+pidslimit:  {{.HostConfig.PidsLimit}}
+secopt:     {{.HostConfig.SecurityOpt}}
+capadd:     {{.HostConfig.CapAdd}}
+binds:      {{.HostConfig.Binds}}
+ports:      {{range $p, $b := .NetworkSettings.Ports}}{{$p}} => {{range $b}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "$n"
+  if u="$(app_viewer_url "$id")"; then echo "viewer:     $u"; fi
+}
+
+cmd_apps_logs() {
+  local id="${1:-}"; app_require "$id"
+  app_exists "$id" || die "not created: $(app_cname "$id")"
+  docker logs --tail "${APPS_LOG_LINES:-60}" "$(app_cname "$id")" 2>&1
+}
+
+cmd_apps_url() {
+  local id="${1:-}"; app_require "$id"
+  local u
+  u="$(app_viewer_url "$id")" || return 1
+  printf '%s\n' "$u"
+  local f; f="$(app_password_file "$id")"
+  [ -f "$f" ] && printf 'password: %s\n' "$(cat "$f")"
+  return 0
+}
+
+# Bridges "show me what we have" with "the catalog is curated": local images are
+# surfaced here, but promoting one to a launchable app is a deliberate edit.
+cmd_apps_discover() {
+  apps_load
+  local known; known="$(printf '%s\n' "$APPS_TABLE" | awk -F'\t' '$2=="image"{print $3}' | sort -u)"
+  printf 'Local images not in the catalog — add a block to %s to make one launchable:\n' "$APPS_FILE"
+  local img
+  while IFS= read -r img; do
+    [ -n "$img" ] || continue
+    printf '%s\n' "$known" | grep -qx -- "$img" && continue
+    printf '  %-42s %s\n' "$img" \
+      "$(docker image inspect -f '{{.Size}}' "$img" 2>/dev/null | awk '{printf "%.2f GB", $1/1e9}')"
+  done <<<"$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>' | sort -u)"
+}
+
+cmd_apps_help() {
+  cat <<'EOF'
+computer apps — launch application containers from a fixed catalog
+
+  apps list                 catalog + live state (from docker, by label)
+  apps up <id>              launch or start; prints the viewer URL + password
+  apps exec <id> <cmd...>   run a command inside a running app
+  apps status <id>          EFFECTIVE posture read back from the daemon
+  apps url <id>             viewer URL + password only
+  apps logs <id>            recent container output
+  apps down <id>            stop, keep the state volume
+  apps rm <id>              remove container, keep the state volume
+  apps discover             local images not yet in the catalog
+
+The catalog is an allowlist: `apps up` takes an app id and nothing else. There
+is no way to pass an image name or a docker flag. The schema has no field for
+--privileged, --network host, --cap-add, --device or a host mount, so those are
+unrepresentable rather than rejected. Viewers bind to loopback and the tailnet
+only — never 0.0.0.0.
+
+Env: COMPUTER_APPS_FILE (default <skill>/apps.yaml)
+     COMPUTER_APPS_STATE (default <skill>/.state)
+     APPS_LOG_LINES (default 60)
+EOF
+}
+
+cmd_apps() {
+  local sub="${1:-list}"; [ $# -gt 0 ] && shift
+  case "$sub" in
+    list|ls) cmd_apps_list "$@" ;;
+    up)      cmd_apps_up "$@" ;;
+    down)    cmd_apps_down "$@" ;;
+    rm)      cmd_apps_rm "$@" ;;
+    status)  cmd_apps_status "$@" ;;
+    exec)    cmd_apps_exec "$@" ;;
+    logs)    cmd_apps_logs "$@" ;;
+    url)     cmd_apps_url "$@" ;;
+    discover) cmd_apps_discover "$@" ;;
+    help|-h|--help) cmd_apps_help ;;
+    *) die "unknown apps command '$sub' — run: computer apps help" ;;
+  esac
+}
+
+cmd_help() {
+  cat <<'EOF'
+computer — a stateful Docker computer
+
+  build                       build the image
+  up [--desktop] [--offline] [--no-password] [--cpus N] [--mem 4g]
+     [--geometry WxH] [--port N]
+                              create/start the box (idempotent).
+                              --desktop also serves this display at
+                              http://<tailscale-ip>:<port>/vnc.html
+  status                      container, display, ports, home size
+  boxes                       every box on this host, across all workspaces
+  exec <cmd...>               run a shell command inside
+  sh                          interactive-ish shell inside
+  put <host> <box>            copy a file in
+  get <box> <host>            copy a file out
+  shot [name.png]             screenshot the virtual display -> host path
+  click <x> <y> [button]      move+click
+  type <text>                 type text
+  key <keysym>                press a key (Return, ctrl+l, ...)
+  windows                     list visible X windows
+  ps                          processes inside the box
+  cdp setup|start|<cmd>       element-level browser control over CDP
+                              (snapshot/click/fill/text/links/goto/...) — see
+                              `computer cdp help`. Use this instead of
+                              click/type for anything you must hit precisely.
+  apps list|up|down|rm|status|url|logs|discover
+                              launch application containers from the fixed
+                              catalog in apps.yaml. Machine-level, not
+                              workspace-scoped. `computer apps help`.
+  log [n]                     container stdout/stderr
+  down                        stop, keep home
+  destroy                     remove container, keep home
+
+Env: COMPUTER_WORKSPACE COMPUTER_IMAGE COMPUTER_NAME COMPUTER_CPUS
+     COMPUTER_MEM COMPUTER_GEOMETRY COMPUTER_PORT COMPUTER_BIND_IP
+     COMPUTER_VNC_PASSWORD
+EOF
+}
+
+case "${1:-help}" in
+  build)   shift; cmd_build "$@" ;;
+  up)      shift; cmd_up "$@" ;;
+  status)  shift; cmd_status "$@" ;;
+  boxes)   shift; cmd_boxes "$@" ;;
+  exec)    shift; cmd_exec "$@" ;;
+  sh)      shift; cmd_sh "$@" ;;
+  put)     shift; cmd_put "$@" ;;
+  get)     shift; cmd_get "$@" ;;
+  shot)    shift; cmd_shot "$@" ;;
+  click)   shift; cmd_click "$@" ;;
+  type)    shift; cmd_type "$@" ;;
+  key)     shift; cmd_key "$@" ;;
+  windows) shift; cmd_windows "$@" ;;
+  ps)      shift; cmd_ps "$@" ;;
+  cdp)     shift; cmd_cdp "$@" ;;
+  apps)    shift; cmd_apps "$@" ;;
+  log)     shift; cmd_log "$@" ;;
+  down)    shift; cmd_down "$@" ;;
+  destroy) shift; cmd_destroy "$@" ;;
+  help|-h|--help) cmd_help ;;
+  *) die "unknown command '$1' — run: computer help" ;;
+esac

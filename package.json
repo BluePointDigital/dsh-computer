@@ -1,0 +1,39 @@
+{
+  "name": "dsh-applications",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Applications menu for the DeepSeek Harness Web GUI: a sidebar entry plus a main panel that launches and displays the containers in the docker-computer app catalog. Also ships the docker-computer skill in this same package.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BluePointDigital/dsh-computer.git"
+  }
+}

@@ -1,0 +1,23 @@
+# dsh-applications bundle patch
+#
+# This file is the `dsh.bundle.patch` layer of the package that lives in the
+# docker-computer skill. It is the same mount line that used to be hand-appended
+# to the profile's own cordis.patch.yml, moved to where the plugin can own it.
+#
+# Why: the profile-level insert mounted the plugin but left it invisible to the
+# GUI's Plugins panel, which enumerates BUNDLES. Every other plugin we install
+# (dsh-better-sidebar, dshmarket, graph-memory) ships exactly this file and is
+# therefore listed under "Installed" with an on/off switch. This one was not, so
+# the Applications menu could not be seen or toggled from the UI.
+#
+# When `dsh-applications` appears in `dsh.profile.bundles`, the profile boot
+# merges this patch instead of the profile-level insert -- so the insert at the
+# end of /data/profiles/web/cordis.patch.yml MUST be removed in the same step,
+# or the plugin mounts twice.
+#
+# The server half serves a fenced /apps/api route that shells `computer apps` --
+# the catalog stays the allowlist; the route cannot name an image or pass a
+# docker flag. Remove this insert and the symlink to unmount.
+- insert:
+    - id: dsh-applications
+      name: 'dsh-applications'
