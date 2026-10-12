@@ -41,7 +41,8 @@ stops it from *believing* it has a computer when dockerd is missing.
 
 - A reachable Docker daemon (nested dockerd is fine)
 - `node` >= 20, `pnpm`
-- For the desktop/VNC half: a browser and, optionally, Tailscale for remote access
+- For embedded desktop/apps: a browser that can reach the DSH GUI. No tailnet
+  membership or per-app public hostname is required.
 
 ## Usage
 
@@ -53,6 +54,28 @@ bin/computer exec 'uname -a'
 bin/computer sh            # shell inside
 bin/computer apps          # the catalog the Applications menu renders
 ```
+
+## Embedded applications (v0.1.9 candidate)
+
+Applications launch **inside DSH**, under `/apps/web/<id>/`, including the noVNC
+desktop. The plugin uses DSH's existing exact-path WebSocket route API; no
+DeepSeek webapp patch or separate hostname per app is needed. Missing mounts or
+capabilities produce an error rather than a tailnet-only fallback/new tab.
+
+For a web app requiring sockets or literal API URL adaptation:
+
+```yaml
+web: 8092:3002
+webSockets: /socket
+webRewrite: /api/
+```
+
+Both fields are optional, space-separated lists. Socket paths are exact; rewrite
+prefixes end in `/`. Prefer native application base-path support where available.
+Legacy viewer-only catalogs remain supported; legacy direct-mode entries need to
+switch to proxy. See [release notes](RELEASE-v0.1.9.md) for verification,
+compatibility boundaries and the production release loop. This repository is the
+source, not the running tag-pinned installation.
 
 ## Layout
 

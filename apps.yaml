@@ -26,14 +26,25 @@
 #                            /apps/web/<id>/ (same origin, so it inherits the
 #                            GUI's session, needs no extra port reachable, and
 #                            cannot refuse to be framed), and also publishes it
-#                            on hostPort as a fallback origin.
-#   webMode                  proxy (default) | direct. `direct` embeds the
-#                            published origin instead of the proxy mount. Use it
-#                            for dashboards that need WebSockets: the host
-#                            webserver matches upgrade routes by EXACT pathname
-#                            only, so a generic prefix upgrade proxy is not
-#                            possible and such an app renders half-dead through
-#                            the proxy.
+#                            on hostPort for operator/CLI diagnostics. The panel
+#                            never falls back to a published origin.
+#   webMode                  proxy (default). Legacy direct is still parsed, but
+#                            the panel displays migration guidance instead of
+#                            embedding an external origin. All apps open in DSH.
+#   webRewrite               optional space-separated JS literal URL prefixes,
+#                            ending in /. Example: webRewrite: /api/ /rpc/
+#                            Opt-in compatibility for SPAs without a base-path
+#                            option. Only matching JS strings are re-pointed;
+#                            JSON/project-relative fragments remain untouched.
+#   webSockets               space-separated absolute paths the app opens sockets
+#                            on (optional). Each is proxied through the mount at
+#                            /apps/web/<id><path>, so an app that needs a socket
+#                            can stay EMBEDDED under webMode: proxy instead of
+#                            being pushed out to its published origin. Upgrade
+#                            routes are matched by exact pathname, which is why
+#                            the paths must be declared and not discovered — a
+#                            route only exists for what is written here.
+#                            Example: webSockets: /websockify
 #   state                    persistent -> named volume at /home/agent that
 #                            survives `apps rm`. Host paths are not expressible.
 #   autostart                true | false. DEFAULT FALSE — apps are ON DEMAND.
@@ -63,7 +74,14 @@ apps:
     name: Linux Desktop
     description: Full Debian desktop with Chromium and a browser viewer; agent- and human-operable at the same time.
     image: dsh-computer:bookworm
+    # The viewer and the web declaration name the SAME listener. That is what
+    # puts the noVNC page under the same-origin mount (/apps/web/desktop/) so it
+    # can be EMBEDDED in the panel. Published URLs remain CLI diagnostics only.
+    # The client explicitly supplies noVNC's path=apps/web/desktop/websockify
+    # and ws/wss selection; noVNC does not infer this from the page's directory.
     viewer: 6081:6080
+    web: 6081:6080
+    webSockets: /websockify
     state: persistent
     cpus: 2
     mem: 4g

@@ -46,11 +46,18 @@ every password once. Resolution falls back to the running container's
 
 ## Before you claim something works
 
-Both suites exist because verification, not code, was the source of every bug here:
+The suites exist because verification, not code, was the source of every bug here:
 
 ```bash
 bash test/apps-password.test.sh     # 12 checks: password resolution order
-node plugin/test/proxy.test.mjs     # proxy: root-absolute URLs, redirects, cookies
+node test/proxy.test.mjs            # HTTP/JS rewrites, gzip guard, SSE, real WebSocket frames
+node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs
+RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional: real Chromium + running desktop
 ```
+
+`upgrade-route.test.mjs` mocks CLI/daemon responses but uses real HTTP/WebSocket
+connections; it creates/deletes no containers and needs no Docker. The optional
+`desktop.test.mjs` uses isolated headless Chromium inside an already-running
+`dsh-app-desktop`, without touching its live browser or the harness.
 
 A green check is a claim about what was checked, not about what works.

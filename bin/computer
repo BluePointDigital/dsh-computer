@@ -514,13 +514,42 @@ apps_load() {
 # `autostart: false` with exit status 0. Validating once, up front, is what makes
 # a typo fail the command instead of quietly choosing a policy nobody asked for.
 apps_validate() {
-  local id auto
+  local id auto ws w web viewer hp cp whp wcp
+  local -a paths
   for id in $(app_ids); do
+    [[ "$id" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || die "malformed app id '$id'"
+    [ "$(app_ids | awk -v id="$id" '$0==id {n++} END {print n}')" = 1 ] || die "duplicate app id '$id'"
     auto="$(app_field "$id" autostart)"
     case "$auto" in
       ''|true|yes|1|false|no|0) ;;
       *) die "app '$id': autostart must be true or false (got '$auto')" ;;
     esac
+    # WebSocket paths are proxied by exact pathname, so each entry must be an
+    # absolute path. A relative entry would register a route no browser ever
+    # requests — the visible failure is a socket that silently never connects.
+    for ws in webSockets webRewrite; do
+      read -r -a paths <<<"$(app_field "$id" "$ws")"
+      for w in "${paths[@]}"; do
+        [[ "$w" =~ ^/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]*$ ]] && [[ "$w" != / ]] \
+          || die "app '$id': $ws entries must be canonical absolute paths (got '$w')"
+        if [ "$ws" = webSockets ]; then
+          [[ "$w" != */ ]] || die "app '$id': webSockets paths cannot end with /"
+        else
+          [[ "$w" = */ ]] || die "app '$id': webRewrite prefixes must end with /"
+        fi
+      done
+    done
+    case "$(app_field "$id" webMode)" in
+      ''|proxy|direct) ;;
+      *) die "app '$id': webMode must be proxy or direct" ;;
+    esac
+    viewer="$(app_field "$id" viewer)"; web="$(app_field "$id" web)"
+    if [ -n "$viewer" ] && [ -n "$web" ]; then
+      hp="${viewer%%:*}"; cp="${viewer##*:}"; [ "$cp" = "$viewer" ] && cp=6080
+      whp="${web%%:*}"; wcp="${web##*:}"; [ "$wcp" = "$web" ] && wcp=80
+      [ "$hp" != "$whp" ] || [ "$cp" = "$wcp" ] \
+        || die "app '$id': viewer and web share host port $hp but disagree on container port"
+    fi
   done
 }
 
@@ -584,6 +613,31 @@ app_vnc_password() {
   printf '%s' "$pw" > "$f"; chmod 600 "$f"; printf '%s' "$pw"
 }
 
+# Publish one host:container port pair onto the caller's `a` array, at most once
+# per host port. `viewer` and `web` may name the SAME port — that is the normal
+# shape for a VNC desktop, whose noVNC page and its WebSocket ride on the one
+# listener, and declaring both is what puts that page under the same-origin
+# mount. Docker fails the whole launch with "address already in use" when a host
+# port is bound twice, so the second declaration is skipped rather than added.
+# The viewer is emitted first and wins, which is what keeps the existing
+# single-declaration apps byte-identical.
+PUBLISHED=()
+
+app_publish() {
+  local h="$1" c="$2" p
+  for p in "${PUBLISHED[@]:-}"; do
+    [ "$p" = "$h" ] && { log "port $h already published on this app — skipping duplicate $h:$c"; return 0; }
+  done
+  PUBLISHED+=("$h")
+  if [ "$BIND_IP" = "0.0.0.0" ]; then
+    a+=(-p "0.0.0.0:${h}:${c}")
+  else
+    a+=(-p "127.0.0.1:${h}:${c}")
+    [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${h}:${c}")
+  fi
+  return 0
+}
+
 app_viewer_url() {
   local v; v="$(app_field "$1" viewer)"
   [ -n "$v" ] || return 1
@@ -638,7 +692,8 @@ json_escape() {
 
 # Machine-readable catalog + state: the contract the GUI's /apps/api route serves.
 apps_list_json() {
-  local first=1 id nm ds img st vw web wcp wmode url wurl pw auto
+  local first=1 id nm ds img st vw web wcp wmode url wurl pw auto jsock w key
+  local -a paths
   printf '{"ok":true,"apps":['
   while IFS= read -r id; do
     [ -n "$id" ] || continue
@@ -655,20 +710,44 @@ apps_list_json() {
     printf '{"id":"%s","name":"%s","description":"%s","image":"%s","state":"%s","autostart":%s' \
       "$(json_escape "$id")" "$(json_escape "$nm")" "$(json_escape "$ds")" \
       "$(json_escape "$img")" "$st" "$auto"
+    # Socket paths the app needs forwarded, as a JSON array. The GUI registers
+    # one exact upgrade route per entry under the mount; see the comment on
+    # `webSockets` in apps.yaml for why they must be declared rather than
+    # discovered.
+    for key in webSockets webRewrite; do
+      read -r -a paths <<<"$(app_field "$id" "$key")"
+      if [ "$key" = webSockets ] && [ ${#paths[@]} -eq 0 ] && [ -n "$vw" ]; then
+        paths=(/websockify)
+      fi
+      if [ ${#paths[@]} -gt 0 ]; then
+        printf ',"%s":[' "$key"
+        jsock=""
+        for w in "${paths[@]}"; do
+          [ -z "$jsock" ] || printf ','
+          jsock=1
+          printf '"%s"' "$(json_escape "$w")"
+        done
+        printf ']'
+      fi
+    done
     if [ -n "$vw" ]; then
       url="$(app_viewer_url "$id" 2>/dev/null)" || url=""
       pw="$(app_viewer_password "$id" 2>/dev/null)" || pw=""
       printf ',"viewer":{"hostPort":"%s","url":"%s","password":"%s"}' \
         "${vw%%:*}" "$(json_escape "$url")" "$(json_escape "$pw")"
     fi
-    # `path` is the same-origin proxy mount the GUI prefers; `url` is the
-    # published origin. `mode: direct` tells the GUI to embed the published
-    # origin instead — needed by dashboards that open WebSockets, because the
-    # host webserver matches upgrade routes by EXACT pathname only, so no
-    # generic prefix upgrade proxy is possible.
-    if [ -n "$web" ]; then
+    # Legacy viewer-only catalogs also receive a mount: no catalog migration or
+    # container recreation is needed for existing noVNC desktops.
+    if [ -z "$web" ] && [ -n "$vw" ]; then
+      web="$vw"
+      wcp="${vw##*:}"; [ "$wcp" = "$vw" ] && wcp=6080
+      wurl="$url"
+    elif [ -n "$web" ]; then
       wurl="$(app_web_url "$id" 2>/dev/null)" || wurl=""
       wcp="${web##*:}"; [ "$wcp" = "$web" ] && wcp=80
+    fi
+    # Published URLs remain CLI/operator diagnostics, not browser fallbacks.
+    if [ -n "$web" ]; then
       wmode="$(app_field "$id" webMode)"; wmode="${wmode:-proxy}"
       printf ',"web":{"hostPort":"%s","containerPort":"%s","url":"%s","path":"/apps/web/%s/","mode":"%s"}' \
         "${web%%:*}" "$wcp" "$(json_escape "$wurl")" "$(json_escape "$id")" "$(json_escape "$wmode")"
@@ -758,6 +837,9 @@ cmd_apps_up() {
   local id="${1:-}"; app_require "$id"
   local image; image="$(app_field "$id" image)"
   [ -n "$image" ] || die "app '$id' has no image: field"
+  # One launch, one publish ledger: app_publish dedupes across the viewer and web
+  # declarations, and must not see ports from a previous launch.
+  PUBLISHED=()
   docker image inspect "$image" >/dev/null 2>&1 \
     || die "image '$image' is not present locally — pull it first:
   docker pull $image"
@@ -817,12 +899,7 @@ cmd_apps_up() {
     # it already includes 127.0.0.1, so binding both fails the whole launch with
     # "listen tcp4 127.0.0.1:PORT: bind: address already in use". A wildcard bind
     # replaces the loopback one rather than joining it.
-    if [ "$BIND_IP" = "0.0.0.0" ]; then
-      a+=(-p "0.0.0.0:${hp}:${cp}")
-    else
-      a+=(-p "127.0.0.1:${hp}:${cp}")
-      [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${hp}:${cp}")
-    fi
+    app_publish "$hp" "$cp"
   fi
 
   # An HTTP dashboard. Published on loopback + BIND_IP as the FALLBACK, so the
@@ -831,12 +908,7 @@ cmd_apps_up() {
   if [ -n "$web" ]; then
     local whp wcp; whp="${web%%:*}"; wcp="${web##*:}"
     [ "$wcp" = "$web" ] && wcp=80
-    if [ "$BIND_IP" = "0.0.0.0" ]; then
-      a+=(-p "0.0.0.0:${whp}:${wcp}")
-    else
-      a+=(-p "127.0.0.1:${whp}:${wcp}")
-      [ "$BIND_IP" != "127.0.0.1" ] && a+=(-p "${BIND_IP}:${whp}:${wcp}")
-    fi
+    app_publish "$whp" "$wcp"
   fi
 
   a+=("$image")

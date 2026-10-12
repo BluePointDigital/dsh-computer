@@ -423,8 +423,8 @@ Design notes worth keeping:
 - Client bundle revisions derive from mtime/size, so an edited client half is
   picked up on a **page reload**; the server half needs a DSH restart.
 - The embedded viewer is given the per-app VNC password so it connects without a
-  prompt; the "New tab" button deliberately omits it, because a tab URL lands in
-  history.
+  prompt. Applications stay inside DSH; there is no New tab action or automatic
+  published-origin fallback.
 
 Install — one idempotent command:
 
@@ -458,36 +458,49 @@ Unmount by removing the insert and the dependency, then `pnpm install`.
 
 ### HTTP dashboards — `web:`
 
-A dashboard with its own UI is the **normal** case; the VNC desktop is the extreme
-one. An app with `web: hostPort:containerPort` is served two ways:
+All application views launch through **`/apps/web/<id>/` on the DSH origin**.
+The server reaches the container's private bridge IP; the user's browser only
+needs to reach DSH. Published CLI URLs are operator diagnostics, not panel
+fallbacks. Legacy `viewer:`-only entries receive a web mount and `/websockify`
+automatically. Legacy `webMode: direct` entries show migration guidance instead
+of an external frame.
 
-- **Same-origin proxy at `/apps/web/<id>/`** (preferred). The panel embeds it, so
-  it inherits the GUI's session, needs no extra published port, and — because the
-  proxy drops `X-Frame-Options` and CSP `frame-ancestors` — a dashboard cannot
-  refuse to be framed by its own console. Root-absolute URLs, redirects and
-  cookies are re-pointed by `lib/proxy.js`, which carries its own suite:
-  `node plugin/test/proxy.test.mjs` (24 checks, including against a live
-  container).
-- **Its published origin**, on loopback + tailnet. The fallback, used
-  automatically when the proxy route is not mounted.
+The client probes the mount with `HEAD` and requires `x-dsh-app-proxy` to match
+the app id. A bare 200 is insufficient: an unmounted route may serve the DSH
+shell. `x-dsh-app-proxy-features` reports `ws` only when all declared upgrade
+routes are actually registered, and `js` when `webRewrite` is configured. Missing
+required capabilities produce a useful error, never a tailnet-only fallback.
 
-The client distinguishes them by **probing**, not by asking: it sends a `HEAD` to
-the mount and requires the proxy's `x-dsh-app-proxy` marker. A bare 200 is not
-enough — an *unmounted* `/apps/web/...` falls through to the SPA server, which
-answers 200 with the app shell, so embedding on status alone would nest the GUI
-inside itself.
+For SPAs without a base-path option, add `webRewrite: /api/` (or a space-separated
+list such as `/api/ /rpc/`). This opt-in text rewrite handles literal prefixes in
+JavaScript responses only, not JSON/project-relative fragments, computed URLs,
+workers or arbitrary routing. Encoded bodies pass through untouched; an upstream
+that ignores `Accept-Encoding: identity` needs an app-side fix. Rewritten bodies
+have upstream validators removed and `Cache-Control: no-store`; SSE streams
+without whole-body buffering.
 
-Two things learned the hard way:
+HTTP and WebSocket requests pass the same DSH trust/authentication gate before
+any container lookup. Front-door Authorization and `dsh-auth-*` cookies are not
+forwarded to app backends. This is **not an isolation boundary for untrusted app
+JavaScript**: same-origin embedded apps must be operator-approved/trusted.
+
+Three things learned the hard way:
 
 - **A black iframe backdrop makes a working dashboard look broken.** The framed
   document's own background is not always composited into a screenshot (seen
   under Xvfb), so a black underlay hides the page. `.dsha-frame` is transparent;
   only the VNC viewer gets `#000`.
-- **WebSockets are NOT proxied.** `dsh-host-webserver` matches upgrade routes by
-  *exact pathname* (`this.upgrades.get(pathname)`) and its single fallback seat
-  is already owned by the SPA server, so no generic prefix upgrade proxy is
-  possible. A dashboard needing them sets `webMode: direct` and is embedded from
-  its published origin instead.
+- **WebSockets are carried by EXACT routes, one per declared path.**
+  `dsh-host-webserver` matches upgrade routes by pathname only
+  (`this.upgrades.get(pathname)`) and the prefix table is not consulted, so a
+  prefix upgrade proxy is not possible. The catalog therefore **declares** the
+  socket paths (`webSockets: /websockify`) and `lib/index.js` registers one exact
+  upgrade route per path per app, dialing the container exactly as the HTTP proxy
+  does. Nothing is discovered: a route exists only for a declared path.
+- **Declaring both `viewer:` and `web:` on the same host port is normal.** That is
+  the VNC desktop: noVNC's page and its WebSocket share one listener, and the
+  duplicate publication is skipped rather than passed to docker, which would fail
+  the launch with "address already in use".
 
 ## Verify before trusting
 

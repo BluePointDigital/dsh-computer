@@ -81,7 +81,9 @@ self-heals instead of silently mismatching.
 
 ```bash
 bash test/apps-password.test.sh     # 12 checks: password resolution order
-node plugin/test/proxy.test.mjs     # proxy: root-absolute URLs, redirects, cookies
+node test/proxy.test.mjs            # rewrites, gzip guard, SSE, real socket frames
+node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs
+RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional real-browser integration
 ```
 
 `bin/install.sh verify` checks the mount, the patch insert, the app catalog and the
