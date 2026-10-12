@@ -4,6 +4,21 @@ Two install shapes, one script. Knowing which one you are about to produce is th
 whole game — they are not interchangeable, and `install.sh` silently switches
 between them.
 
+## Where this lives
+
+This repo root **is** a DSH workspace: `/workspace/dsh-computer`, with a `.dsh/`
+marker at the root. So a session started here resolves its own box identity
+(`computer status` reports `dsh-computer-f78d205b`, distinct from the box belonging
+to `Docker Testing`), and the `docker-computer` skill is available from it because
+that skill is installed system-wide at `/data/skills/docker-computer`.
+
+The repo root doubling as the workspace root means workspace-local state
+(`.dsh-computer/`, `.dsh/`) lands beside the source, and both are gitignored.
+
+This folder is inside the Syncthing tree, so source replicates to
+the Windows peer — which is intended, since `node_modules` and the box home are
+excluded by `/workspace/.stignore`.
+
 ## The two shapes
 
 | | Production | Development |

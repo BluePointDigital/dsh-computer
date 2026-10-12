@@ -3,6 +3,7 @@
 *.tar.gz
 
 # Box runtime state: a bind-mounted home can be hundreds of MB of workspace data.
+.dsh/
 .dsh-computer/
 **/.dsh-computer/
 
