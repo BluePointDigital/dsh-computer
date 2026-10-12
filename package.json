@@ -1,11 +1,11 @@
 {
   "name": "dsh-applications",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "Applications menu for the DeepSeek Harness Web GUI: a sidebar entry plus a main panel that launches and displays the containers in the docker-computer app catalog. Also ships the docker-computer skill in this same package.",
   "type": "module",
   "scripts": {
-    "test": "node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs && node test/proxy.test.mjs && bash test/apps-password.test.sh",
+    "test": "node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs test/compression.test.mjs && node test/proxy.test.mjs && bash test/apps-password.test.sh",
     "test:desktop": "RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs"
   },
   "main": "./lib/index.js",
