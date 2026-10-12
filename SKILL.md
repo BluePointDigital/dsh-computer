@@ -141,6 +141,15 @@ to confirm a window mapped before screenshotting.
   stale marker from the *previous* run. Probe X itself (`xdpyinfo`) rather than
   trusting that file alone — `box-desktop` started against a dead display exits
   **0** having done nothing.
+- **`patchReload: "live"` is inert — every patch change needs a `dsh web` restart.**
+  The profile declares it, but the string `patchReload` occurs **zero** times across
+  `/opt/dsh` on 0.2.0-rc.2, and the `hmr` plugin is configured with `root: []`.
+  `applyEntryPatches` runs at **boot**; plugin config is consumed in `apply()` at
+  mount. So `install.sh`'s `cordis.patch.yml` insert — the thing that mounts the
+  Applications menu — does **not** appear until the harness restarts. Verified
+  2026-10-12 by grep. What *is* live: edits to skill files (the filesystem skill
+  watches its roots) and the client half (reloaded on a page refresh, since client
+  revisions derive from mtime/size).
 - **App state lived inside the package, so `pnpm install` deleted it.** `APPS_STATE`
   defaults to `$SKILL_DIR/.state`, and `/data/skills/docker-computer` is a symlink
   into `node_modules/dsh-applications` -- a pnpm-managed directory that any install

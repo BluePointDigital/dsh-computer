@@ -30,7 +30,9 @@ bin/install.sh
 `bin/install.sh` is idempotent and safe to re-run.
 
 A restart is required after step 2: `dsh.profile.bundles` is the composition root, and
-`patchReload: live` covers only the patch layer (`cordis.patch.yml`), not the bundle list.
+`patchReload: live` is **inert** on 0.2.0-rc.2 (see SKILL.md): every patch-layer change
+needs a `dsh web` restart, and the bundle list needs one for a *different* reason --
+bundles are resolved outside the Cordis module roots.
 
 `SKILL.md` is what makes the agent aware the capability exists — and `bin/install.sh verify` is what
 stops it from *believing* it has a computer when dockerd is missing.

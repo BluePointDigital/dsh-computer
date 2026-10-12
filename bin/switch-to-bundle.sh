@@ -11,7 +11,8 @@
 #
 # THIS NEEDS A RESTART. `dsh.profile.bundles` is the composition root, not the
 # patch layer. HMR watches exact profile patch paths ("live profile patch files
-# outside Cordis module roots"), so `patchReload: live` does NOT cover a bundles
+# outside Cordis module roots"). Separately, patchReload is INERT on 0.2.0-rc.2
+# (see SKILL.md), so the patch layer also needs a restart.
 # change -- it takes the fullReload path, which restarts the process. Expect the
 # GUI to drop for ~10s.
 #

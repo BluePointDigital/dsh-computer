@@ -252,7 +252,8 @@ step "3. Register the mount"
 #   bundle form (preferred) -- `dsh-applications` in dsh.profile.bundles. The
 #        plugin's own cordis.patch.yml supplies the row, the GUI Plugins panel
 #        lists it, and it gets an on/off toggle. Needs a RESTART: bundles are
-#        the composition root and are NOT covered by patchReload: live.
+#        the composition root. NOTE: patchReload is inert anyway (see SKILL.md),
+#        so a restart is required for the patch layer too.
 #   insert form (legacy)    -- a hand-appended `- insert:` in the profile patch.
 #        Applies live, but is invisible to the Plugins panel with no toggle.
 #        That invisibility is why the Applications menu could not be seen or
@@ -300,7 +301,7 @@ if name not in b:
 " "$PROFILE_PKG" "$PLUGIN_NAME"
   ok "added to dsh.profile.bundles"
   warn "RESTART REQUIRED — bundles are the composition root"
-  echo "       patchReload: live does not cover this; the plugin's own"
+  echo "       a restart is required (patchReload is inert); the plugin's own"
   echo "       cordis.patch.yml supplies the mount row at boot."
 fi
 
