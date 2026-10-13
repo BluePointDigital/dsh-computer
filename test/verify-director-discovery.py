@@ -11,7 +11,6 @@ body=r'''(async()=>{
 const target=await call('Target.createTarget',{url:base});const attach=await call('Target.attachToTarget',{targetId:target.result.targetId,flatten:true});session=attach.result.sessionId;
 const click=async text=>evaluate(`(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()===${JSON.stringify(text)}||b.getAttribute('aria-label')===${JSON.stringify(text)});if(!b)throw Error('Button missing');b.click()})()`);
 await until(`Array.from(document.querySelectorAll('button')).some(b=>b.getAttribute('aria-label')==='Applications')`);await click('Applications');
-console.log(await evaluate(`Promise.all(['list','discovery'].map(x=>fetch('/apps/api/'+x).then(r=>r.json()))).then(v=>JSON.stringify(v))`));
 await until(`document.body.textContent.includes('dsh-app-hyperframes')`);
 await evaluate(`(()=>{const d=Array.from(document.querySelectorAll('.dsha-desc')).find(d=>d.textContent.startsWith('dsh-app-hyperframes'));d.querySelector('button').click()})()`);
 await click('Review connection');await until(`document.body.textContent.includes('Registration only:')`);
