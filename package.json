@@ -1,6 +1,6 @@
 {
   "name": "dsh-applications",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Applications menu for the DeepSeek Harness Web GUI: a sidebar entry plus a main panel that launches and displays the containers in the docker-computer app catalog. Also ships the docker-computer skill in this same package.",
   "type": "module",

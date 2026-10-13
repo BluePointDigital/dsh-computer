@@ -1,4 +1,7 @@
 import test from 'node:test'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
+import {fileURLToPath} from 'node:url'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -70,6 +73,13 @@ test('catalog survives replacement package defaults and explicit file remains su
  assert.equal(await fs.readFile(target,'utf8'),'original catalog')
  assert.equal((await fs.stat(target)).mode&0o777,0o600)
  assert.equal(await durableCatalog({root:f.root,source,explicit:source}),source)
+})
+
+test('catalog CLI entry works through installed package directory symlink',async t=>{
+ const f=await fixture(t),link=path.join(f.root,'package-link')
+ await fs.symlink(fileURLToPath(new URL('..',import.meta.url)),link)
+ const {stdout}=await promisify(execFile)('node',[path.join(link,'lib/catalog-state.mjs')],{env:{...process.env,COMPUTER_APPS_STATE:f.root,COMPUTER_APPS_FILE:''}})
+ assert.equal(stdout.trim(),path.join(f.root,'catalog.yaml'))
 })
 
 test('new install cannot overwrite registered existing app id',async t=>{
