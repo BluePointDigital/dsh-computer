@@ -97,3 +97,43 @@ Generalisation worth keeping: never fix an embed configuration by editing the
 stored settings alone. A cached immutable app bundle can hold the old behaviour
 indefinitely, and the server will look correct while the user sees the fault.
 
+
+## Follow-up 3 — 2026-10-13 every app load is fresh (v0.2.4, commit 6d63d42)
+
+Reported after v0.2.3: a private tab loaded the studio but a **hard refresh in the
+normal window did not**. Measured, in order:
+
+- The harness shell and the app bundle register **no service worker** (0 references
+  each), so a hard reload is not defeated by one.
+- The app keeps only telemetry/feedback flags in `localStorage` and opens **no
+  IndexedDB database**, so corrupt app storage is an unlikely cause.
+- Remaining difference between a private tab and the normal window: the profile
+  itself (extensions/auto-translate are the classic producers of a `removeChild`
+  inside a React tree, and Chrome disables extensions in private tabs). Not
+  reproducible from this side: a clean browser pass through the panel showed zero
+  console errors, and 11 studio panels, a resize and leaving the app produced no
+  error card — only benign `ResizeObserver` warnings. The "Something went wrong"
+  card is HyperFrames' **own** error boundary (found in its bundle; it prints
+  `error.message`), so the failure is app-internal.
+
+Decision (the user's, and the simpler design): instead of a manual reload button,
+**give every app load a fresh URL salt**, so a stale bundle cannot survive *any*
+open — not just a configuration change. `resolveView` appends `?dsha=<salt>` to
+the document URL; `embedToken` folds the salt into the asset token; `appSearch`
+consumes `dsha` and strips it, so the app sees an unmodified query string.
+
+Verified on Director (live v0.2.4):
+
+| Check | Result |
+|---|---|
+| Two consecutive opens | salts `mv67lvmiw9r`, `mv67lxh6rrv`; editor loaded both times |
+| Same CSS asset | re-fetched from network both times (46,932 bytes, no cache reuse) |
+| Salt reaches the app? | nginx saw `GET /?keep=1` — salt consumed, `keep=1` preserved |
+| VNC viewer regression | noVNC connected with `dsha` beside `path`/`password` |
+
+Cost, measured not guessed: every open re-downloads the app's own assets (studio
+CSS 46,932 bytes and its ~1.7 MB JS bundle over the LAN). Accepted deliberately in
+exchange for an app that can never come up from an older load.
+
+Both instances pin v0.2.4; Director restarted and verified, Olympus staged on disk
+only. Backup: `/data/backups/olympus-apps-v024-20261013-0058`.
