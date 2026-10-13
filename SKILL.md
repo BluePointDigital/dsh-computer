@@ -525,11 +525,15 @@ without whole-body buffering.
 **Changing `webRewrite` is not enough on its own for an app already open.** App
 bundles are usually served `immutable, max-age=1y`, and a browser that cached one
 before the rewrite existed will never refetch it — the app then keeps calling the
-unprefixed API paths and looks broken while the server is correct. The mount
-therefore appends `?dsha=<token>` to script/style URLs, where the token covers the
-app's container, port, path, sockets and rewrite prefixes: any mount change yields
-a URL no browser has cached. This was found live — HyperFrames appeared to ignore
-a fixed configuration until the token was introduced.
+unprefixed API paths and looks broken while the server is correct. Two things
+prevent that. The mount appends `?dsha=<token>` to script/style URLs, where the
+token covers the app's container, port, path, sockets and rewrite prefixes, so any
+mount change yields a URL no browser has cached. And every app load is embedded
+with a **fresh per-load salt** on the document URL, so an app always opens from
+current files: the token then covers the salt too. The proxy consumes `dsha` and
+strips it before forwarding, so the app itself never sees DSH's parameter. This was
+found live — HyperFrames appeared to ignore a fixed configuration until asset URLs
+were versioned.
 
 HTTP and WebSocket requests pass the same DSH trust/authentication gate before
 any container lookup. Front-door Authorization and `dsh-auth-*` cookies are not

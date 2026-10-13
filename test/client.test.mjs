@@ -42,8 +42,23 @@ test('missing capability, mismatched marker, direct mode and failed mount fail c
 })
 test('ordinary app supports old marker but rewrite app requires js capability', async () => {
   const ordinary = { id: 'desktop', web: desktop.web }
-  assert.equal((await load({ 'x-dsh-app-proxy': 'desktop' }).resolveView(ordinary)).src, '/apps/web/desktop/')
+  const view = await load({ 'x-dsh-app-proxy': 'desktop' }).resolveView(ordinary)
+  const url = new URL(view.src, 'https://harness.example')
+  assert.equal(url.pathname, '/apps/web/desktop/')
   assert.equal((await load(headers).resolveView({ ...ordinary, webRewrite: ['/api/'] })).src, null)
+})
+test('every load carries a fresh salt so no app can come up from a cached bundle', async () => {
+  const app = { id: 'desktop', web: { path: '/apps/web/desktop/' } }
+  const first = new URL((await load(headers).resolveView(app)).src, 'https://harness.example')
+  const second = new URL((await load(headers).resolveView(app)).src, 'https://harness.example')
+  assert.match(first.searchParams.get('dsha'), /^[a-z0-9]{1,16}$/)
+  assert.match(second.searchParams.get('dsha'), /^[a-z0-9]{1,16}$/)
+  assert.notEqual(first.searchParams.get('dsha'), second.searchParams.get('dsha'))
+  // The salt rides alongside a viewer's own parameters rather than replacing them.
+  const viewer = await load(headers).resolveView(desktop)
+  const vurl = new URL(viewer.src, 'https://harness.example')
+  assert.equal(vurl.searchParams.get('path'), 'apps/web/desktop/websockify')
+  assert.match(vurl.searchParams.get('dsha'), /^[a-z0-9]{1,16}$/)
 })
 test('no published URLs or new-tab action exist; back callback is passed', () => {
   assert.ok(!source.includes('window.open'))

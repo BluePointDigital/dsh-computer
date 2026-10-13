@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process'
 import {
   rewriteHtml,
   embedToken,
+  appSearch,
   rewriteJs,
   rewriteCsp,
   rewriteLocation,
@@ -100,7 +101,18 @@ check('embed token changes with mount configuration and is otherwise stable', ()
   assert.notEqual(embedToken({ ...base, prefixes: [] }), first, 'rewrite change must version assets')
   assert.notEqual(embedToken({ ...base, sockets: [] }), first, 'socket change must version assets')
   assert.notEqual(embedToken({ ...base, containerId: 'def' }), first, 'different container must not share a token')
+  assert.equal(embedToken({ ...base, salt: 'r1' }), embedToken({ ...base, salt: 'r1' }), 'one load must reuse its own assets')
+  assert.notEqual(embedToken({ ...base, salt: 'r1' }), embedToken({ ...base, salt: 'r2' }), 'a reload salt must refresh assets')
+  assert.notEqual(embedToken({ ...base, salt: 'r1' }), first, 'a salted load must not reuse unsalted assets')
   assert.match(first, /^[a-f0-9]{10}$/)
+})
+
+check('appSearch consumes the reload salt and forwards every other parameter', () => {
+  assert.equal(appSearch('?dsha=ab12'), '')
+  assert.equal(appSearch('?dsha=ab12&path=apps/web/desktop/websockify'), '?path=apps%2Fweb%2Fdesktop%2Fwebsockify')
+  assert.equal(appSearch('?autoconnect=1&dsha=ab12&resize=scale'), '?autoconnect=1&resize=scale')
+  assert.equal(appSearch(''), '')
+  assert.equal(appSearch(undefined), '')
 })
 
 check('rewriteCsp drops frame-ancestors and keeps the rest', () => {
