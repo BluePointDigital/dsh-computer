@@ -137,3 +137,31 @@ exchange for an app that can never come up from an older load.
 
 Both instances pin v0.2.4; Director restarted and verified, Olympus staged on disk
 only. Backup: `/data/backups/olympus-apps-v024-20261013-0058`.
+
+## Follow-up 4 — 2026-10-13 translation opt-out (v0.2.5, commit on main)
+
+Reported after v0.2.4: the app **still** only works in a private window, with fresh
+asset URLs in place — so the failure is not cache. The user's hypothesis was page
+translation. What was measured:
+
+- **App cookies: none.** `GET /`, `/api/projects` and `/healthz` on the app
+  container return no `Set-Cookie`, so a stale session cookie cannot explain a
+  profile-only failure.
+- **No service worker** in the shell or the app bundle (0 references each).
+- **Translation simulation did not reproduce it.** Wrapping 80 React-owned text
+  nodes inside the studio's `#root` in `<font class="translated-ltr">` (what a page
+  translator does) and then clicking through four panels left the app running with
+  no error card. So translation is plausible but **unconfirmed** as the cause.
+
+Shipped anyway, because it is the standard opt-out and costs nothing: the proxy now
+writes `translate="no"` on `<html>` and a `<meta name="google" content="notranslate">`
+into every embedded document, and the client marks the frame `translate="no"`. A
+translator works per document, so the opt-out must live in the app's own HTML — an
+attribute on the embedding iframe would not cover the app. Verified live: the frame
+and the app's `<html>` both report `translate="no"`, the meta is present, and the
+studio still loads.
+
+Whatever this turns out to be, note the failure boundary: a private window differs
+from a normal one in **extensions (disabled in private by default)**, cookies/storage
+and translation settings. Nothing in DSH differs. The decisive isolation test is a
+**new normal Chrome profile**, not another incognito tab.
