@@ -14,7 +14,9 @@ test('every state setter the bundle calls is declared', () => {
   const declared = new Set(
     [...source.matchAll(/\[\s*[\w$]+\s*,\s*([\w$]+)\s*\]\s*=\s*React\.useState/g)].map((m) => m[1]),
   )
-  const called = [...source.matchAll(/\b(set[A-Z][\w$]*)\s*\(/g)].map((m) => m[1])
+  // Not preceded by a dot: `input.setDraft(...)` is a method on an object, not a
+  // React state setter, and the first version of this check flagged it.
+  const called = [...source.matchAll(/(?<![\w$.])(set[A-Z][\w$]*)\s*\(/g)].map((m) => m[1])
   const dangling = [...new Set(called)].filter((name) => !declared.has(name) && !BUILTINS.test(name))
   assert.deepEqual(dangling, [], `undeclared state setters called: ${dangling.join(', ')}`)
 })
