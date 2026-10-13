@@ -1013,6 +1013,15 @@ computer apps — launch application containers from a fixed catalog
   apps down <id>            stop, keep the state volume
   apps rm <id>              remove container, keep the state volume
   apps discover             local images not yet in the catalog
+  apps recipes              supported recipe plans (JSON)
+  apps prepare              prepare immutable install review; reads JSON stdin
+  apps jobs                 durable installation progress/reviews (JSON)
+  apps approve <job> <hash> --trust-publisher
+                            explicit operator approval; agents must not approve
+  apps run <job>             execute approved install; owned rollback on failure
+  apps cancel <job>          cancel review/queued operation, no install
+  apps recover               clean interrupted owned installs, keep data
+  apps uninstall <id>        unregister managed app, keep volumes/images
 
 The catalog is an allowlist: `apps up` takes an app id and nothing else. There
 is no way to pass an image name or a docker flag. The schema has no field for
@@ -1032,6 +1041,9 @@ EOF
 }
 
 cmd_apps() {
+  if [ "${COMPUTER_APPS_LEGACY:-0}" != 1 ]; then
+    exec node "$BIN_DIR/app-cli.mjs" "$@"
+  fi
   local sub="${1:-list}"; [ $# -gt 0 ] && shift
   case "$sub" in
     list|ls) cmd_apps_list "$@" ;;

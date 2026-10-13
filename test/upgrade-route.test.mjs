@@ -13,7 +13,7 @@ const originalExec = childProcess.execFile
 childProcess.execFile = (bin, args, _opts, callback) => {
   if (bin === 'docker') {
     inspectCalls++
-    queueMicrotask(() => callback(null, JSON.stringify({ bridge: { IPAddress: '127.0.0.1' } }), ''))
+    queueMicrotask(() => callback(null, JSON.stringify({ NetworkSettings: { Networks: { bridge: { IPAddress: '127.0.0.1' } } } }), ''))
   } else if (delayed) delayed.push(callback)
   else queueMicrotask(() => callback(null, JSON.stringify({ ok: true, apps }), ''))
 }

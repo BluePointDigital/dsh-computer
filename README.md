@@ -55,7 +55,27 @@ bin/computer sh            # shell inside
 bin/computer apps          # the catalog the Applications menu renders
 ```
 
-## Embedded applications (v0.1.9 candidate)
+## Add applications (v0.2.0 candidate)
+
+**My apps** is the installed/catalog app screen. **Add app** offers three paths:
+
+1. Supported recipes: HTTP Echo, Nginx and the locally built Linux Desktop.
+2. **Install something else…** opens a new DSH conversation with a draft setup
+   request in the chosen workspace. The agent researches/prepares; you approve.
+3. **Advanced** prepares a single-container image/entry/resources/data/env plan.
+
+Every path uses one shared installer with a durable private registry, immutable
+image review, explicit publisher-trust approval, progress, logs and owned rollback.
+The agent never needs to edit node_modules or add a raw docker run command.
+New apps publish no host ports. Uninstall keeps data volumes/images; reinstall
+uses fresh volumes rather than silently adopting a previous install's data.
+
+Preparation can download an image for review but creates/starts no container.
+Same-origin app JavaScript shares the harness origin: only install trusted code.
+This is an app installer, not a Portainer clone or a general Compose orchestrator.
+See [installation contract](INSTALLATION.md) for limitations and recovery.
+
+## Embedded applications
 
 Applications launch **inside DSH**, under `/apps/web/<id>/`, including the noVNC
 desktop. The plugin uses DSH's existing exact-path WebSocket route API; no

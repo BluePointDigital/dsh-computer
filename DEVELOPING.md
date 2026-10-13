@@ -82,7 +82,8 @@ self-heals instead of silently mismatching.
 ```bash
 bash test/apps-password.test.sh     # 12 checks: password resolution order
 node test/proxy.test.mjs            # rewrites, gzip guard, SSE, real socket frames
-node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs
+npm test                          # deterministic installer + existing regressions
+RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs  # isolated real UI/daemon
 RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional real-browser integration
 ```
 

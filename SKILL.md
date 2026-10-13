@@ -381,9 +381,52 @@ port shows as published, and nothing answers.
 
 ### Adding an app
 
-Copy a block in `apps.yaml`; `apps discover` lists local images not yet
-catalogued. `apps up` refuses an image that is not present and prints the
-`docker pull` to run.
+Use **Applications → Add app**. Choose a recipe (HTTP Echo, Nginx, Linux Desktop),
+prepare an Advanced single-container plan, or open a dedicated setup conversation.
+The conversation opens with a draft, not an auto-sent request. An agent may research
+and **prepare** a plan; it must not approve/execute it on the user's behalf.
+
+The UI and `computer apps` share AppManager. Definitions, jobs and credentials are
+stored under `COMPUTER_APPS_STATE` (default `$DSH_HOME/.dsh-applications`), outside
+node_modules and synced workspace. Existing operator `apps.yaml` remains a legacy
+allowlist; new installed ids may not override it. Do not edit the package catalog
+to install new apps.
+
+Prepare a plan through stdin (do not include credentials in a chat or source file):
+
+```bash
+printf '%s' '{"plan":{"id":"my-web","name":"My web","image":"nginx:1.28-alpine","webPort":80}}' | computer apps prepare
+computer apps jobs
+```
+
+The returned review includes an image content id and approval hash. **Stop and ask
+the human to approve in Applications → Add app.** Explicit operator CLI approval
+is also supported: `computer apps approve <job-id> <hash> --trust-publisher`, then
+`computer apps run <job-id>`. Agent-generated text is not approval.
+
+Supported plan fields: id/name/description, image with tag or digest, webPort,
+webPath, canonical webSockets/webRewrite arrays, integer cpus/memoryMb/shmMb,
+volumes as `[{"target":"/data"}]`, command argv array, env object, viewer/localImage
+booleans, and autostart (false by default). Unknown fields are rejected. No host
+mounts, arbitrary Docker flags, added capabilities, devices or host networking.
+New managed apps publish **no host ports**; the embedded proxy reaches the bridge.
+Docker default capabilities/outbound networking remain. Only trusted publisher
+code should be embedded: same-origin app JavaScript is not isolated from DSH.
+
+Preparing review may download an image. Container creation/start happens only
+after approval. Images declaring VOLUME directories must list those targets in
+the plan; no unreviewed anonymous volume is accepted. The installer pins reviewed
+image content, checks web readiness, and rolls back only its operation-owned
+container on failure. A ready web endpoint is not proof of every SPA route/socket;
+verify the embedded UI before reporting success.
+
+Progress survives requests in `computer apps jobs`. If a worker is interrupted,
+`computer apps recover` or **Recover interrupted installs** cleans only owned
+partial containers and marks pending work failed. Nothing silently resumes.
+Uninstall keeps named data volumes/images, deletes saved environment values, and
+never affects another app. Reinstallation uses fresh operation-owned volumes;
+retained data is not silently remounted. Restoring retained data is an operator
+follow-up, not currently an in-panel volume migration feature.
 
 ### The GUI menu — plugin `dsh-applications`
 

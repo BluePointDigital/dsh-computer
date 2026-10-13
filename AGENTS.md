@@ -44,6 +44,12 @@ package, which any `pnpm install` replaces wholesale and which silently deleted
 every password once. Resolution falls back to the running container's
 `VNC_PASSWORD`, so a lost cache self-heals.
 
+New installed applications use the same private root for versioned registry,
+progress journals and private env files. CLI and server share AppManager; agent
+setup may prepare plans but must never approve/execute on the human's behalf.
+Do not put credentials or the registry in a synced workspace/package directory.
+Read INSTALLATION.md before altering installation/recovery behavior.
+
 ## Before you claim something works
 
 The suites exist because verification, not code, was the source of every bug here:
@@ -51,7 +57,8 @@ The suites exist because verification, not code, was the source of every bug her
 ```bash
 bash test/apps-password.test.sh     # 12 checks: password resolution order
 node test/proxy.test.mjs            # HTTP/JS rewrites, gzip guard, SSE, real WebSocket frames
-node --test test/client.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs
+npm test                          # all deterministic installer/proxy/CLI regressions
+RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs  # isolated Add app → Docker → iframe
 RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional: real Chromium + running desktop
 ```
 
