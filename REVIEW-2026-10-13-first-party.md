@@ -97,7 +97,52 @@ before anything else. It removes the largest share of "tacked on" for one
 client-only pass with no server or packaging risk. P1 follows immediately after,
 because localisation is cheap once the strings are being touched anyway.
 
-## Open questions for the owner
+## Decisions (owner, 2026-10-13)
+
+1. **Placement** — sidebar **plus** a `settings.section` for configuration. **P2
+   confirmed.**
+2. **Locale** — English is fine. **P1 dropped.** No string table, no
+   `README.i18n.yaml`; if a deployment ever needs another language it is a
+   translation of literals, not an architecture change.
+3. **Distribution** — no npm; stay on pinned GitHub tags. Relevant context found
+   while answering: the repository is **already public** (`github.com/…` → 200,
+   raw files readable anonymously) and no instance holds a git/npm credential, so
+   the tag installs depend on that visibility. A scan of the publishable file set
+   found **no key material**; what a public repo does expose is the implementation
+   and a few internal identifiers (`director.bluepointdigital.com` in the rollout
+   docs, the box tailnet IP in `SKILL.md`). Making it private is possible but needs
+   a credentialed install path on every instance first — a separate decision.
+
+## Mechanism worth not rediscovering
+
+A client plugin gets the shell's component library through its **manifest inject
+list**, not by bundling it. `package.json` → `dsh.client.inject` must name
+`@deepseek-ai/dsh-client-ui-primitives`; the shell bundle registers that id in its
+platform module table (`{"…dsh-client-ui-slots":hh, "…dsh-client-ui-primitives":sE,
+…}`), which is what a bundle's `require(id)` resolves against. A hand-written
+bundle — this one has no bundler — can therefore use the primitives exactly like a
+first-party package.
+
+## Status after pass 1 (commit `dc74fa4`)
+
+- **Landed:** `dsh-client-ui-primitives` declared in the manifest; the state badge
+  and the "same origin" badge are the shell's `Tag`; every colour is a
+  `--dsw-alias-*` token (the only literal left is the intentional VNC black);
+  no class is referenced without a rule.
+- **Deliberately not yet:** the `Button` swap. `dsha-btn` has 17 call sites across
+  the installer and viewer; converting them while the CSS is deleted piecemeal
+  leaves unstyled buttons, and a half-migrated button set looks worse than either
+  end state. It is one pass: all 17 sites, CSS deleted in the same commit, with the
+  panel open for a visual check.
+- Suites: client 6/6, `npm test` 49/49, proxy 41, password 12 — all green.
+
+## Next
+
+Deploy to Director and restart it (the manifest change needs a host restart), look
+at the panel in light and dark, then release and roll out. After that: the button
+pass, then P2.
+
+## Original open questions
 
 1. Placement — sidebar **plus** a settings section (recommended), or settings only?
 2. Locale scope for P1 — which languages matter for the deployments being sold?
