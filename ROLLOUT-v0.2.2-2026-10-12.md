@@ -45,3 +45,21 @@ In Director Applications → Found existing apps → HyperFrames → Review list
 Review connection, inspect and confirm publisher trust, then Add to My apps.
 Launch is separate. We did not grant publisher trust on the user's behalf.
 This restores its listing without recreating its retained container/storage.
+
+## Follow-up — 2026-10-13 HyperFrames embedded routing
+
+User registered/launched HyperFrames and reported a waiting-for-preview screen.
+The server was running; registration had empty webRewrite. Browser calls to
+`/api/projects` escaped the mount and returned harness 404s. Backed up existing
+registry inside private state and set HyperFrames `webRewrite: ["/api/"]` under
+the manager lock, preserving immutable identity and all other settings. No
+container recreation, restart or volume changes were needed. Actual installed
+Applications iframe now renders welcome/Inspector/Timeline/Export; project and
+ffmpeg endpoints return 200 through the app mount. Reproducible canary is
+`test/diagnose-hyperframes.py`.
+
+Separate limitation: project history endpoint returns 404 and app logs report
+HistoryBusyError referencing pid 1. Editor loads, but project history is not
+verified/healthy. No lock files were removed and no editing/render operation
+was performed. The prior recovery review test did not establish app usability;
+this follow-up verifies the actual embedded editor, not merely port readiness.
