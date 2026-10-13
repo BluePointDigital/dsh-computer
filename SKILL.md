@@ -528,12 +528,20 @@ before the rewrite existed will never refetch it — the app then keeps calling 
 unprefixed API paths and looks broken while the server is correct. Two things
 prevent that. The mount appends `?dsha=<token>` to script/style URLs, where the
 token covers the app's container, port, path, sockets and rewrite prefixes, so any
-mount change yields a URL no browser has cached. And every app load is embedded
-with a **fresh per-load salt** on the document URL, so an app always opens from
-current files: the token then covers the salt too. The proxy consumes `dsha` and
-strips it before forwarding, so the app itself never sees DSH's parameter. This was
-found live — HyperFrames appeared to ignore a fixed configuration until asset URLs
-were versioned.
+mount change yields a URL no browser has cached. And the proxy stamps **every
+document it serves** with a fresh per-load salt, so an app always opens from
+current files: the token then covers the salt too. The salt is consumed by the
+proxy and stripped before forwarding, so the app itself never sees DSH's
+parameter.
+
+Two rules keep that from being undone. A document or script that needed rewriting
+but could not be — the app compressed it despite the proxy asking for `identity`
+— is served `no-store` with validators stripped, because an unrewritten
+`immutable` bundle survives a year in a browser. And if an app's calls reach the
+host root instead of the mount, suspect a bundle cached from before the rewrite
+was configured: compare the body the proxy serves today against the one the
+browser executes. This was found live — HyperFrames appeared to ignore a fixed
+configuration until asset URLs were versioned.
 
 HTTP and WebSocket requests pass the same DSH trust/authentication gate before
 any container lookup. Front-door Authorization and `dsh-auth-*` cookies are not

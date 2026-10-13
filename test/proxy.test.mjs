@@ -394,6 +394,13 @@ async function main() {
   check('gzip JS stays byte-safe and unrewritten', () => {
     assert.equal(gunzipSync(encoded.raw).toString(), 'fetch("/api/projects");new EventSource("/api/events")')
   })
+  check('an unrewritable script is never left cacheable', () => {
+    // Served with the app's immutable headers, the browser would keep unmounted
+    // code for a year and the app would call the host root forever.
+    assert.equal(encoded.headers['cache-control'], 'no-store')
+    assert.equal(encoded.headers.etag, undefined)
+    assert.equal(encoded.headers['last-modified'], undefined)
+  })
   const sse = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { req.destroy(); reject(new Error('SSE buffered')) }, 2000)
     const req = http.get({ host: '127.0.0.1', port: frontPort, path: `${MOUNT}/events` }, (res) => {

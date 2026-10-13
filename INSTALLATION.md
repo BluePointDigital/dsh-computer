@@ -1,4 +1,4 @@
-# Applications installation contract — v0.2.5
+# Applications installation contract — v0.2.6
 
 ## Changing an embed configuration
 
@@ -7,10 +7,17 @@ versions its script/style URLs with a `?dsha=` token derived from that
 configuration. Without it a browser keeps the app bundle it cached while the
 previous configuration was live — apps serve bundles `immutable` — so the app
 would keep using the old URLs and appear broken after an otherwise correct
-change. Every app load also carries a fresh per-load salt, so opening an app
-always fetches current files even when nothing about the configuration changed;
-no user action or cache clearing is needed. The salt is consumed by the proxy and
-never forwarded, so apps see an unmodified query string.
+change. The proxy also stamps **every document it serves** with a fresh per-load salt, so
+opening an app always fetches current files even when nothing about the
+configuration changed and even when the panel client asking for it is itself out
+of date. A salt supplied by the client is used as-is; the salt is consumed by the
+proxy and never forwarded, so apps see an unmodified query string.
+
+A response that needed rewriting but could not be rewritten — the app compressed
+it despite the proxy asking for `identity` — is served `no-store` with its
+validators stripped. Unrewritten scripts and documents are never cacheable: an
+`immutable` unmounted bundle lives for a year in a browser and leaves the app
+calling the host root, which no server-side fix can reach.
 
 Every embedded document is also opted out of translation (`translate="no"` on
 `<html>` plus a `notranslate` meta, and `translate="no"` on the frame). A page
