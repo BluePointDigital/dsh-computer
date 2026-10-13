@@ -165,3 +165,47 @@ Whatever this turns out to be, note the failure boundary: a private window diffe
 from a normal one in **extensions (disabled in private by default)**, cookies/storage
 and translation settings. Nothing in DSH differs. The decisive isolation test is a
 **new normal Chrome profile**, not another incognito tab.
+
+## Follow-up 5 — 2026-10-13 the console settles it (v0.2.6)
+
+The user's console, from the failing normal window, contained the decisive line:
+
+```
+index-ByJU5J6n.js:49  GET https://director.bluepointdigital.com/api/projects 404
+```
+
+The app was calling the **host root**, not its mount — i.e. it was executing JS whose
+`/api/...` literals had never been rewritten. Measured against the live server:
+
+- The same bundle, fetched today, is **fully rewritten**: 43 `/apps/web/hyperframes/api/`
+  occurrences, **0** raw `"/api/"` literals, served `no-store`.
+- The app's own bundle builds API paths from absolute literals
+  (`"/api/projects"`, 3 hits; 0 slash-less variants) and there is no `<base>` tag, so
+  a browser executing a **freshly served** bundle cannot produce a root call.
+- Conclusion: the failing window was running a **cached bundle from before the
+  rewrite was configured**. That era's JS was streamed unrewritten *and kept the
+  app's `immutable, max-age=1y` headers*, so it survives a year and no server-side
+  fix can reach it. A private window has an empty cache, which is why it works.
+- Translation is exonerated: the app's text is English and unmodified in the crash
+  frame; the earlier `<font>` simulation had already failed to reproduce it.
+- `/api/changes.summary?sessionId=…` 404s too, but that string is **not** in the app
+  bundle nor in the harness frontend — another stale-client artifact, unrelated to
+  the crash.
+
+Two server-side changes, because freshness must not depend on the client being
+current:
+
+1. **Every document response is stamped with a fresh salt server-side** (the
+   client's `dsha` is honoured if present). Freshness no longer requires the panel
+   client half to be up to date, and a stale frame that is merely reloaded gets
+   fresh asset URLs and recovers.
+2. **A response that needed rewriting but could not be rewritten** (the app
+   compressed it despite our `identity` request) is served `no-store` with
+   validators stripped. An unrewritten `immutable` bundle can never be cached again.
+
+Verified live on Director (v0.2.6): two identical document requests returned
+different tokens (`ca037e2921`, `e91821dd60`); the URL carrying the user's failing
+salt `a078c73291` returned a fresh token (`1f41048e9e`); the served JS showed 43
+mounted / 0 raw calls with `no-store`; the panel opened the studio with no crash
+card. Both instances pin v0.2.6. Backup:
+`/data/backups/olympus-apps-v026-20261013-1455`.
