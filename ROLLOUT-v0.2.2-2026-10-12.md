@@ -63,3 +63,37 @@ HistoryBusyError referencing pid 1. Editor loads, but project history is not
 verified/healthy. No lock files were removed and no editing/render operation
 was performed. The prior recovery review test did not establish app usability;
 this follow-up verifies the actual embedded editor, not merely port readiness.
+
+## Follow-up 2 — 2026-10-13 stale immutable bundle (v0.2.3, commit 5435744)
+
+The user reported the app **still** stuck after the routing fix. The server was
+correct; the browser was not. HyperFrames serves its bundle
+`cache-control: public, max-age=31536000, immutable`. While `webRewrite` was
+empty, `proxyHttp` passed that bundle through untouched
+(`isJs` requires non-empty prefixes), so the browser cached the un-rewritten
+bundle for a year and a later config change could never reach it.
+
+Reproduced and verified in a persistent Chromium profile inside Director's
+desktop container (method: temporarily set `webRewrite: []`, load the app to
+cache the bundle, restore `["/api/"]`, reload):
+
+| Phase | Result |
+|---|---|
+| cached with empty prefixes | stalled; bundle `transfer: 0`; `/api/projects` 404s |
+| prefixes restored, old code | **still stalled** — the user's report, reproduced |
+| after v0.2.3 | loads; bundle fetched over the network as `?dsha=017e5e03bd` |
+
+In the fixed run the poisoned URL still appears with `transfer: 0` — it remains
+cached but is never used again. All app API calls returned 200.
+
+Fix: `rewriteHtml` appends `?dsha=<token>` to script/style URLs, where
+`embedToken` hashes the app's container, port, path, sockets and rewrite
+prefixes, so any mount change yields a URL no browser has cached. Director and
+Olympus both pin v0.2.3. Director restarted and verified; HyperFrames identity
+and mounts re-checked unchanged after the temporary flips. Olympus staged only,
+not restarted. Backup: `/data/backups/olympus-apps-v023-20261013-0032`.
+
+Generalisation worth keeping: never fix an embed configuration by editing the
+stored settings alone. A cached immutable app bundle can hold the old behaviour
+indefinitely, and the server will look correct while the user sees the fault.
+
