@@ -10,7 +10,9 @@ function load(headers = {}, status = 200) {
   let exports
   const context = { URL, AbortController, setTimeout, clearTimeout,
     window: { location: new URL('https://harness.example/'), __ModuleLoader__: { load: ({ factory }) => {
-      exports = factory(() => ({ createElement: (type, props, ...children) => ({ type, props, children }) }))
+      exports = factory((id) => id === '@deepseek-ai/dsh-client-ui-primitives'
+        ? { Button: 'Button', Tag: 'Tag' }
+        : { createElement: (type, props, ...children) => ({ type, props, children }) })
     } } },
     fetch: async () => ({ ok: status === 200, headers: { get: (key) => headers[key] ?? null } }),
   }
