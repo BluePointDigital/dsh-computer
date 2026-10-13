@@ -522,6 +522,15 @@ that ignores `Accept-Encoding: identity` needs an app-side fix. Rewritten bodies
 have upstream validators removed and `Cache-Control: no-store`; SSE streams
 without whole-body buffering.
 
+**Changing `webRewrite` is not enough on its own for an app already open.** App
+bundles are usually served `immutable, max-age=1y`, and a browser that cached one
+before the rewrite existed will never refetch it — the app then keeps calling the
+unprefixed API paths and looks broken while the server is correct. The mount
+therefore appends `?dsha=<token>` to script/style URLs, where the token covers the
+app's container, port, path, sockets and rewrite prefixes: any mount change yields
+a URL no browser has cached. This was found live — HyperFrames appeared to ignore
+a fixed configuration until the token was introduced.
+
 HTTP and WebSocket requests pass the same DSH trust/authentication gate before
 any container lookup. Front-door Authorization and `dsh-auth-*` cookies are not
 forwarded to app backends. This is **not an isolation boundary for untrusted app

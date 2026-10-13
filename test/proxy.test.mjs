@@ -18,6 +18,7 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import { execFileSync } from 'node:child_process'
 import {
   rewriteHtml,
+  embedToken,
   rewriteJs,
   rewriteCsp,
   rewriteLocation,
@@ -69,6 +70,37 @@ check('rewriteHtml leaves protocol-relative URLs alone', () => {
 check('rewriteHtml re-points inline CSS url()', () => {
   const out = rewriteHtml('<style>body{background:url(/bg.png)}</style>', MOUNT)
   assert.match(out, /url\(\/apps\/web\/demo\/bg\.png\)/)
+})
+
+check('embed token versions script/style URLs so immutable bundles cannot mask a config change', () => {
+  const out = rewriteHtml(
+    '<script src="/assets/a.js"></script><link href="/assets/a.css?v=1" rel="stylesheet">'
+    + '<link href="/assets/a.css#x" rel="stylesheet"><a href="/page">p</a><form action="/api/submit">',
+    MOUNT,
+    'tok123',
+  )
+  assert.match(out, /src="\/apps\/web\/demo\/assets\/a\.js\?dsha=tok123"/)
+  assert.match(out, /href="\/apps\/web\/demo\/assets\/a\.css\?v=1&dsha=tok123"/)
+  assert.match(out, /href="\/apps\/web\/demo\/assets\/a\.css\?dsha=tok123#x"/)
+  // Navigation and API endpoints keep their exact paths.
+  assert.match(out, /href="\/apps\/web\/demo\/page"/)
+  assert.match(out, /action="\/apps\/web\/demo\/api\/submit"/)
+})
+
+check('embed token is omitted when absent and never touches non-asset URLs', () => {
+  const plain = rewriteHtml('<script src="/assets/a.js"></script>', MOUNT)
+  assert.match(plain, /src="\/apps\/web\/demo\/assets\/a\.js"/)
+  assert.ok(!plain.includes('dsha='))
+})
+
+check('embed token changes with mount configuration and is otherwise stable', () => {
+  const base = { containerId: 'abc', port: 3002, path: '/', sockets: ['/websockify'], prefixes: ['/api/'] }
+  const first = embedToken(base)
+  assert.equal(embedToken({ ...base }), first, 'same configuration must keep cached bundles valid')
+  assert.notEqual(embedToken({ ...base, prefixes: [] }), first, 'rewrite change must version assets')
+  assert.notEqual(embedToken({ ...base, sockets: [] }), first, 'socket change must version assets')
+  assert.notEqual(embedToken({ ...base, containerId: 'def' }), first, 'different container must not share a token')
+  assert.match(first, /^[a-f0-9]{10}$/)
 })
 
 check('rewriteCsp drops frame-ancestors and keeps the rest', () => {

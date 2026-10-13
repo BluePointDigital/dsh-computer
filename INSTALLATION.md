@@ -1,4 +1,14 @@
-# Applications installation contract — v0.2.1
+# Applications installation contract — v0.2.3
+
+## Changing an embed configuration
+
+Editing an app's embed settings (adding `webRewrite`, changing the port or path)
+versions its script/style URLs with a `?dsha=` token derived from that
+configuration. Without it a browser keeps the app bundle it cached while the
+previous configuration was live — apps serve bundles `immutable` — so the app
+would keep using the old URLs and appear broken after an otherwise correct
+change. A user who changed a configuration must still reload the page once; the
+new token makes that reload fetch a URL nothing has cached.
 
 ## Durable listings and existing containers
 
