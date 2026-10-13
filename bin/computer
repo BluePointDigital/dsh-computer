@@ -505,6 +505,30 @@ apps_load() {
   fi
 }
 
+# Resolve an app id, tolerating the moment just after the container starts.
+#
+# Observed: seconds after a restart, `apps up <id>` answered "unknown app '<id>'"
+# while `apps list` showed that exact app; a retry a minute later worked. The
+# catalog is otherwise stable (a missing or truncated file has its own distinct
+# errors — verified, not assumed), so the honest reading is a transient boot-window
+# read, not a bad catalog. Re-read and retry before failing, and when it does fail
+# say what the catalog actually contains, so the next occurrence is diagnosable
+# instead of mysterious.
+app_require() {
+  local id="${1:-}" attempt=0
+  apps_load
+  [ -n "$id" ] || die "usage: computer apps <list|up|down|rm|status|logs|url|discover> [app-id]"
+  while :; do
+    if printf '%s\n' "$(app_ids)" | grep -qx -- "$id"; then return 0; fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 5 ] || break
+    sleep 1
+    APPS_TABLE=""
+    apps_load
+  done
+  die "unknown app '$id' — the catalog at $APPS_FILE defines $(app_ids | wc -l) app(s): $(app_ids | tr '\n' ' ')"
+}
+
 # Validate every catalog value the launcher interprets, HERE in the main shell.
 #
 # This must not be delegated to the reader functions. `app_restart_policy` is
@@ -556,14 +580,6 @@ apps_validate() {
 
 app_ids() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' '$2=="id"{print $3}'; }
 app_field() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' -v i="$1" -v k="$2" '$1==i && $2==k {print $3; exit}'; }
-
-app_require() {
-  local id="${1:-}"
-  apps_load
-  [ -n "$id" ] || die "usage: computer apps <list|up|down|rm|status|logs|url|discover> [app-id]"
-  printf '%s\n' "$(app_ids)" | grep -qx -- "$id" \
-    || die "unknown app '$id' — run: computer apps list"
-}
 
 app_cname()   { printf '%s-%s' "$APPS_PREFIX" "$1"; }
 app_running() { [ "$(docker inspect -f '{{.State.Running}}' "$(app_cname "$1")" 2>/dev/null || echo false)" = "true" ]; }
