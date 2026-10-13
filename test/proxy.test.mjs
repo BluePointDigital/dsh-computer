@@ -107,6 +107,19 @@ check('embed token changes with mount configuration and is otherwise stable', ()
   assert.match(first, /^[a-f0-9]{10}$/)
 })
 
+check('an embedded app opts out of translation inside its own document', () => {
+  const page = rewriteHtml('<html lang="en"><head><title>x</title></head><body><div id="root"></div></body></html>', '/apps/web/x/', 'tok')
+  assert.match(page, /<html lang="en" translate="no">/)
+  assert.match(page, /<head><meta name="google" content="notranslate">/)
+  // Idempotent, and an app that already decided for itself is left alone.
+  assert.equal(rewriteHtml(page, '/apps/web/x/', 'tok'), page)
+  const own = rewriteHtml('<html translate="yes"><head></head><body></body></html>', '/apps/web/x/', 'tok')
+  assert.match(own, /<html translate="yes">/)
+  assert.ok(!own.includes('translate="no"'))
+  const bare = rewriteHtml('<body></body>', '/apps/web/x/', '')
+  assert.ok(bare.includes('<meta name="google" content="notranslate">'))
+})
+
 check('appSearch consumes the reload salt and forwards every other parameter', () => {
   assert.equal(appSearch('?dsha=ab12'), '')
   assert.equal(appSearch('?dsha=ab12&path=apps/web/desktop/websockify'), '?path=apps%2Fweb%2Fdesktop%2Fwebsockify')

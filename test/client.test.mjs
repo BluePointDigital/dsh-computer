@@ -63,6 +63,10 @@ test('every load carries a fresh salt so no app can come up from a cached bundle
 test('no published URLs or new-tab action exist; back callback is passed', () => {
   assert.ok(!source.includes('window.open'))
   assert.ok(source.includes('h(Viewer, { ...view, onBack })'))
+  const tree2 = load(headers).Viewer({ app: desktop, src: '/apps/web/desktop/', mode: 'proxy', onBack: () => {} })
+  const frame = tree2.children[1]
+  assert.equal(frame.type, 'iframe')
+  assert.equal(frame.props.translate, 'no', 'the embed must tell translators to leave the app alone')
   const onBack = () => {}
   const tree = load(headers).Viewer({ app: desktop, src: null, mode: 'blocked', reason: 'test', onBack })
   assert.equal(tree.children[0].children[0].props.onClick, onBack)

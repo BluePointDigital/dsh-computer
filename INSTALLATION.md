@@ -1,4 +1,4 @@
-# Applications installation contract — v0.2.4
+# Applications installation contract — v0.2.5
 
 ## Changing an embed configuration
 
@@ -11,6 +11,13 @@ change. Every app load also carries a fresh per-load salt, so opening an app
 always fetches current files even when nothing about the configuration changed;
 no user action or cache clearing is needed. The salt is consumed by the proxy and
 never forwarded, so apps see an unmodified query string.
+
+Every embedded document is also opted out of translation (`translate="no"` on
+`<html>` plus a `notranslate` meta, and `translate="no"` on the frame). A page
+translator rewrites text nodes into elements of its own; React then removes nodes
+whose parent it no longer owns and the app dies with `removeChild`. A translator
+works per document, so this opt-out has to be written into the app's own HTML by
+the proxy — an attribute on the embedding iframe would not cover the app.
 
 ## Durable listings and existing containers
 

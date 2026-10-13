@@ -28,5 +28,6 @@ test('normal upstream close must not abort asynchronous host compression', async
   const body = await new Promise((resolve, reject) => http.get(`http://127.0.0.1:${fp}/`, (res) => {
     const chunks=[];res.on('data',b=>chunks.push(b));res.on('end',()=>resolve(Buffer.concat(chunks)));res.on('error',reject)
   }).on('error',reject))
-  assert.equal(gunzipSync(body).toString(), '<p>completed</p>')
+  // The proxy also opts the embedded document out of translation, hence the meta.
+  assert.equal(gunzipSync(body).toString(), '<meta name="google" content="notranslate"><p>completed</p>')
 })
