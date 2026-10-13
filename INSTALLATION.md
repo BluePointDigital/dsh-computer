@@ -1,4 +1,29 @@
-# Applications installation contract — v0.2.0 candidate
+# Applications installation contract — v0.2.1
+
+## Durable listings and existing containers
+
+The legacy catalog is seeded once into private `catalog.yaml` under the app state
+root using atomic no-clobber creation. Subsequent package upgrades cannot replace
+it. An explicit COMPUTER_APPS_FILE remains supported and operator-owned; back up
+that location separately. Migrate existing package customizations **before**
+installing the new package. A missing/corrupt catalog is not repaired by guessing.
+
+Existing-container registrations live in private `existing.json`, separate from
+installer-owned containers. Startup/refresh discovery exposes labelled orphans in
+My apps and other unlisted TCP containers under Add existing container. Discovery
+never starts, adopts or embeds anything. Human review confirms port, entry path,
+optional exact sockets/JS prefixes and same-origin trust. Registration binds to
+immutable container identity and current configuration; no create, rm, volume,
+network or port-publication command is issued. Auto-remove and unsupported
+host/none/shared network containers are rejected. Imported app lifecycle permits
+Launch/Stop and Forget listing only. Missing originals remain visible and are not
+recreated or replaced by a same-name container. Forget changes only the registry.
+
+This is metadata recovery, not a sandbox: existing container privileges remain
+unchanged and are disclosed in review. Discovery is limited to this instance's
+Docker daemon, not remote host containers. Completed/cancelled/failed installer
+journals are retained under collapsed Installation history.
+
 
 ## Surface
 

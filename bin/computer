@@ -497,6 +497,7 @@ apps_parse() {
 
 apps_load() {
   if [ -z "$APPS_TABLE" ]; then
+    APPS_FILE="$(node "$SKILL_DIR/lib/catalog-state.mjs")" || die "cannot load durable app catalog"
     [ -f "$APPS_FILE" ] || die "no app catalog at $APPS_FILE"
     APPS_TABLE="$(apps_parse)" || die "app catalog is malformed: $APPS_FILE"
     [ -n "$APPS_TABLE" ] || die "app catalog defines no apps: $APPS_FILE"

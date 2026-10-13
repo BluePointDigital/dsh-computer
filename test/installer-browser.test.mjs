@@ -66,7 +66,17 @@ const until=async(expression)=>{const deadline=Date.now()+25000;while(Date.now()
 const click=async(text)=>evaluate('(()=>{const b=Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==='+JSON.stringify(text)+');if(!b)throw Error("button missing");b.click()})()');
 (async()=>{
 const target=await call('Target.createTarget',{url:'http://${gateway}:${port}/'});const attach=await call('Target.attachToTarget',{targetId:target.result.targetId,flatten:true});session=attach.result.sessionId;
-await until('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="+ Add app")');await click('+ Add app');await click('Advanced container install');
+await until('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="Review listing")');
+await evaluate('(()=>{const d=Array.from(document.querySelectorAll(".dsha-desc")).find(d=>d.textContent.startsWith("${id}-existing"));d.querySelector("button").click()})()');
+await click('Review connection');await until('document.body.textContent.includes("Registration only:")');
+await evaluate('Array.from(document.querySelectorAll("label")).find(l=>l.textContent.includes("I trust this app")).querySelector("input").click()');await click('Add to My apps');
+await until('!!Array.from(document.querySelectorAll(".dsha-card")).find(c=>c.querySelector(".dsha-name")?.textContent==="${id}-old")');
+await evaluate('(()=>{const c=Array.from(document.querySelectorAll(".dsha-card")).find(c=>c.querySelector(".dsha-name")?.textContent==="${id}-old");Array.from(c.querySelectorAll("button")).find(b=>b.textContent==="Launch").click()})()');
+await until('Array.from(document.querySelectorAll(".dsha-card")).find(c=>c.querySelector(".dsha-name")?.textContent==="${id}-old")?.textContent.includes("Open")');
+await evaluate('(()=>{const c=Array.from(document.querySelectorAll(".dsha-card")).find(c=>c.querySelector(".dsha-name")?.textContent==="${id}-old");Array.from(c.querySelectorAll("button")).find(b=>b.textContent==="Open").click()})()');
+await until('document.querySelector("iframe")?.contentDocument?.body?.textContent.includes("Welcome to nginx!")');await click('← All apps');
+console.log('PASS discovered existing container: review/trust, register without recreation, Launch and embedded nginx');
+await click('+ Add app');await click('Advanced container install');
 await evaluate('(()=>{const values={"App id":"${id}","Display name":"Installer smoke","Image with explicit tag or digest":"nginx:alpine"};for(const [label,value]of Object.entries(values)){const el=Array.from(document.querySelectorAll("label")).find(l=>l.textContent.startsWith(label)).querySelector("input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(el,value);el.dispatchEvent(new Event("input",{bubbles:true}))}})()');
 await click('Prepare review');await until('!!document.querySelector("section[aria-label]")');
 await evaluate('document.querySelector("section[aria-label] input[type=checkbox]").click()');await click('Approve & install');
@@ -81,9 +91,13 @@ await Promise.race([call('Browser.close'),new Promise(r=>setTimeout(r,1500))]);i
 `
   try {
     await exec('docker',['image','inspect','nginx:alpine'])
+    await exec('docker',['create','--name',`${id}-existing`,'--label',`dsh.apps.id=${id}-old`,'nginx:alpine'])
     const result=await exec('docker',['exec','dsh-app-desktop','node','-e',driver],{timeout:110000,maxBuffer:2*1024*1024})
     console.log(result.stdout)
   }finally {
+    const owned=JSON.parse((await exec('docker',['inspect',`${id}-existing`])).stdout)[0]
+    assert.equal(owned.Config.Labels['dsh.apps.id'],`${id}-old`)
+    await exec('docker',['rm','-f',owned.Id])
     const manager=new AppManager({root})
     if((await manager.registry()).apps[id])await manager.action('uninstall',id)
     disposers.reverse().forEach(d=>d());server.closeAllConnections();server.close()

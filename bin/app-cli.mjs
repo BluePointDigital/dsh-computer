@@ -4,6 +4,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { AppManager, recipes } from '../lib/app-manager.js'
+import { ExistingApps } from '../lib/existing-apps.js'
 const exec = promisify(execFile)
 const bin = fileURLToPath(new URL('./computer', import.meta.url))
 const args = process.argv.slice(2)
@@ -13,6 +14,7 @@ const legacy = async () => {
   return JSON.parse(stdout).apps
 }
 const manager = new AppManager({ legacy })
+const existing = new ExistingApps(manager)
 const json = (value) => console.log(JSON.stringify(value))
 async function stdinJson() {
   let text = ''
@@ -20,7 +22,10 @@ async function stdinJson() {
   return JSON.parse(text)
 }
 try {
-  if(command==='recipes') json({ok:true,recipes})
+  if(command==='discover-existing') json({ok:true,containers:await existing.discover([...await legacy(),...await manager.list()])})
+  else if(command==='review-existing') json({ok:true,review:await existing.review(await stdinJson())})
+  else if(command==='add-existing') json({ok:true,app:await existing.add(await stdinJson())})
+  else if(command==='recipes') json({ok:true,recipes})
   else if(command==='prepare') json({ok:true,job:await manager.prepare(await stdinJson())})
   else if(command==='approve') {
     if(rest[2]!=='--trust-publisher')throw Error('Usage: approve <job-id> <approval-hash> --trust-publisher')
@@ -31,14 +36,17 @@ try {
   else if(command==='cancel') json({ok:true,job:await manager.cancel(rest[0])})
   else if(command==='recover') json({ok:true,recovered:await manager.recover()})
   else if(command==='list' || command==='ls') {
-    const apps=[...await legacy(),...await manager.list()]
+    const apps=[...await legacy(),...await manager.list(),...await existing.list()]
     const ids=new Set()
     for(const app of apps){if(ids.has(app.id))throw Error('Duplicate legacy/installed app id: '+app.id);ids.add(app.id)}
     if(rest.includes('--json'))json({ok:true,schemaVersion:1,apps})
     else { console.log('ID\tNAME\tSTATE\tSOURCE');for(const app of apps)console.log([app.id,app.name,app.state,app.managed?'installed':'catalog'].join('\t')) }
   }else {
     const registry=await manager.registry()
-    if(registry.apps[rest[0]] && ['up','down','rm','uninstall','logs','status','url'].includes(command)) {
+    if((await existing.registry()).apps[rest[0]]) {
+      if(command==='status'||command==='url')json({ok:true,app:(await existing.list()).find(a=>a.id===rest[0])})
+      else json(await existing.action(command,rest[0]))
+    }else if(registry.apps[rest[0]] && ['up','down','rm','uninstall','logs','status','url'].includes(command)) {
       if(command==='status'||command==='url')json({ok:true,app:(await manager.list()).find(app=>app.id===rest[0])})
       else json(await manager.action(command,rest[0]))
     }else {
