@@ -151,6 +151,7 @@ cmd_up() {
     fi
     docker run -d --name "$NAME" \
       --cpus "$CPUS" --memory "$MEM" --shm-size="$SHM" \
+      --pids-limit 2048 \
       --network "$net" \
       -e SCREEN_GEOMETRY="$GEO" \
       -v "$HOME_DIR:/home/agent" \

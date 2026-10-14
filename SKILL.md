@@ -192,7 +192,20 @@ to confirm a window mapped before screenshotting.
 
 - No `--privileged`. The only host path mounted is the home dir, which lives
   *inside* the session workspace, so the workspace sandbox still bounds it.
-- Caps: `--cpus 2 --memory 4g --shm-size 1g` by default.
+- Caps: `--cpus 2 --memory 4g --shm-size 1g` by default, plus **`--pids-limit 2048`**.
+- **Do NOT add `--security-opt no-new-privileges` — it breaks the box.** Measured
+  on a throwaway box (2026-10-14): the flag stops sudo escalating, so `sudo -n id -u`
+  fails with *"The 'no new privileges' flag is set, which prevents sudo from running
+  as root"* and `apt-get install` dies with it. Passwordless sudo **is** the box —
+  "root-capable package installs" is the premise — so this hardening is mutually
+  exclusive with the feature, not a trade-off to weigh. Managed apps do carry the
+  flag; they have no sudo. `--pids-limit 2048` was tested the same way and is safe:
+  boot, `sudo -n id -u` → `0`, `apt-get install jq` → `jq-1.6`, and Chromium reaches
+  9 processes. `--read-only` fails for the same reason as the flag above: the image
+  is writable by design so `apt` can work.
+- Verify a posture change on a throwaway name before committing it, or the first
+  real user finds out: `COMPUTER_NAME=dsh-flagtest docker run` with the same flags,
+  then `sudo -n id -u` and an `apt-get install`.
 - **What the daemon can actually reach — CORRECTED.** The nested daemon runs as
   root *inside this container's user namespace*, so it can bind-mount any path
   **this container can see** (`/data`, the workspace, the home mount) — and nothing
