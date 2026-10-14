@@ -58,6 +58,7 @@ The suites exist because verification, not code, was the source of every bug her
 bash test/apps-password.test.sh     # 12 checks: password resolution order
 node test/proxy.test.mjs            # HTTP/JS rewrites, gzip guard, SSE, real WebSocket frames
 npm test                          # all deterministic installer/proxy/CLI regressions
+node test/host-mount-live.mjs       # real app served at a hostname root (skips if absent)
 RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs  # isolated Add app → Docker → iframe
 RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional: real Chromium + running desktop
 ```
@@ -66,5 +67,29 @@ RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional: real Chromium + run
 connections; it creates/deletes no containers and needs no Docker. The optional
 `desktop.test.mjs` uses isolated headless Chromium inside an already-running
 `dsh-app-desktop`, without touching its live browser or the harness.
+`host-mount-live.mjs` attaches to an already-running app (default
+`dsh-app-filebrowser`) and starts its own listener on an ephemeral port; it
+creates nothing and skips loudly when the container is absent.
+
+## Host-mounted apps (`webHost`)
+
+Two ways to publish a web app, and the choice is not cosmetic. `/apps/web/<id>/`
+is the default and needs nothing but a running DSH, but it only works for apps
+that write their URLs as literals — an app that computes them at runtime keeps
+calling the origin root, which is the harness, and looks broken while healthy.
+`webHost: <name>` serves such an app at the root of its own name, where its
+self-derived URLs are correct and **nothing needs rewriting**.
+
+`lib/host-router.js` holds the pure decisions (normalize, index, exact-match);
+`lib/host-listen.js` owns the listener. Both are unit-tested, and the load-bearing
+assertion is that a root-absolute path reaches the app unchanged — under the path
+mount that same request is the bug. If you ever find yourself wanting a rewrite
+rule for a host-mounted app, the routing is wrong, not the app.
+
+Two constraints worth knowing before changing this. `dsh-host-webserver` matches
+by pathname only and its arbitrary-path seat is already held by the SPA server,
+which is why this is a separate listener rather than a DSH route. And it binds
+loopback by default because the harness has no login: widening `DSH_APPS_HOST_BIND`
+widens what is reachable without passing whatever fronts the instance.
 
 A green check is a claim about what was checked, not about what works.

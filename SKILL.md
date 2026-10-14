@@ -608,6 +608,72 @@ Three things learned the hard way:
   duplicate publication is skipped rather than passed to docker, which would fail
   the launch with "address already in use".
 
+### Host-mounted apps — `webHost:`
+
+The path mount is the default because it needs nothing but a running DSH. It
+stops working for one specific kind of app: one that computes its own URLs at
+runtime from server config rather than writing them as literals. No amount of
+path rewriting reaches those — `webRewrite` handles literal prefixes only, and
+the proxy cannot know what an app will decide to call itself. Such an app asks
+the origin root for `/api/...`, the harness answers, and the app looks broken
+while the container is perfectly healthy.
+
+`webHost: <hostname>` serves that app at the **root of its own name** instead.
+The app then needs no base-URL configuration at all, because it is not being
+lied to: it really is at `/`.
+
+```yaml
+  - id: filebrowser
+    name: File Browser
+    image: filebrowser/filebrowser:v2.63.23
+    web: 8080:80
+    webHost: files.example.com
+```
+
+What the implementation does, and does not do:
+
+- **Nothing is rewritten.** At `mount = ''` the redirect, cookie and CSP helpers
+  in `lib/proxy.js` are already no-ops or the correct root form; `rewriteLocation`
+  returns locations unchanged, `scopeCookie` writes `Path=/`. `webRewrite` is
+  neither needed nor consulted. If a host-mounted app ever needs a rewrite, that
+  is a signal something is wrong, not a field to add.
+- **Matching is EXACT** (`lib/host-router.js`). There is deliberately no
+  `*.example.com` rule: with a wildcard DNS record and a wildcard certificate, a
+  suffix rule would forward *any* name under the domain to a container, which
+  turns a typo or an attacker-chosen name into a reachable backend. The reachable
+  set stays equal to the declared set.
+- **The app sees the container address as `Host`**, not the public hostname, the
+  same as the path mount. The public name is the front door's, and forwarding it
+  invites host-header confusion.
+- **It is its own listener, not a DSH route.** `dsh-host-webserver` matches by
+  pathname only and its one arbitrary-path seat (`registerFallback`) is held by
+  the SPA server, so the plugin listens separately — default
+  `127.0.0.1:3099`, overridable with `DSH_APPS_HOST_PORT` and
+  `DSH_APPS_HOST_BIND`. Binding beyond loopback logs a warning and is a real
+  decision: **the harness has no login, so anything that reaches that port skips
+  whatever fronts the instance.**
+- **The container address is resolved per request**, so a restarted app on a new
+  IP is followed. Only the hostname → app map is cached, keyed to the catalog's
+  own stamp.
+- **A bad `webHost` fails at catalog load**, not at request time: a malformed
+  name, a missing `web:`, or the same host on two apps are all `apps_validate`
+  errors. Anonymous 404s are what this prevents — a name that cannot be
+  normalized would otherwise present as a live port with no clue which line
+  caused it.
+- **WebSockets are carried automatically**, with no `webSockets:` declaration:
+  the listener owns the upgrade for every routed host. The path mount still
+  requires declared paths, because its upgrades are exact DSH routes.
+
+Deployment is deliberately out of scope and belongs to whatever fronts the
+instance: point the name at the host, terminate TLS, and forward to
+`127.0.0.1:3099`. The path mount keeps working alongside, so no app has to move.
+
+Verified end to end against real File Browser (`test/host-mount-live.mjs`,
+skipped when the container is absent): the app root serves the app, its injected
+`BaseURL` is empty and correct, `POST /api/login` reaches the app and returns the
+app's own 403 rather than the harness 404, and a root-absolute `/static/...`
+asset is served by the app.
+
 ## Verify before trusting
 
 A screenshot that "ran" proves nothing. Read the PNG back and confirm it shows

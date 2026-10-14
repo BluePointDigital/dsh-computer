@@ -540,7 +540,7 @@ app_require() {
 # `autostart: false` with exit status 0. Validating once, up front, is what makes
 # a typo fail the command instead of quietly choosing a policy nobody asked for.
 apps_validate() {
-  local id auto ws w web viewer hp cp whp wcp
+  local id auto ws w web viewer hp cp whp wcp whost nhost HOST_SEEN=""
   local -a paths
   for id in $(app_ids); do
     [[ "$id" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || die "malformed app id '$id'"
@@ -570,6 +570,20 @@ apps_validate() {
       *) die "app '$id': webMode must be proxy or direct" ;;
     esac
     viewer="$(app_field "$id" viewer)"; web="$(app_field "$id" web)"
+    # webHost mounts the app at the ROOT of that hostname instead of under
+    # /apps/web/<id>/. Validate it here rather than downstream: the router treats
+    # a hostname that cannot be normalized as "no app", so a typo would present
+    # as a live port answering 404 with no clue which line caused it.
+    whost="$(app_field "$id" webHost)"
+    if [ -n "$whost" ]; then
+      [ -n "$web" ] || die "app '$id': webHost requires a web mapping"
+      nhost="$(norm_host "$whost")" || nhost=""
+      [ -n "$nhost" ] || die "app '$id': webHost '$whost' is not a bare hostname (no scheme, port or path)"
+      case "$HOST_SEEN" in
+        *"|$nhost|"*) die "webHost '$nhost' is claimed by more than one app" ;;
+      esac
+      HOST_SEEN="$HOST_SEEN|$nhost|"
+    fi
     if [ -n "$viewer" ] && [ -n "$web" ]; then
       hp="${viewer%%:*}"; cp="${viewer##*:}"; [ "$cp" = "$viewer" ] && cp=6080
       whp="${web%%:*}"; wcp="${web##*:}"; [ "$wcp" = "$web" ] && wcp=80
@@ -581,6 +595,18 @@ apps_validate() {
 
 app_ids() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' '$2=="id"{print $3}'; }
 app_field() { printf '%s\n' "$APPS_TABLE" | awk -F'\t' -v i="$1" -v k="$2" '$1==i && $2==k {print $3; exit}'; }
+
+# Canonical form of a hostname, or failure. Mirrors normalizeHost in
+# lib/host-router.js: lowercase, no trailing dot, no scheme, no port, no path.
+# Anything else fails so the catalog is rejected at load rather than producing a
+# hostname the router can never match.
+norm_host() {
+  local h
+  h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  h="${h%.}"
+  [[ "$h" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]] || return 1
+  printf '%s' "$h"
+}
 
 app_cname()   { printf '%s-%s' "$APPS_PREFIX" "$1"; }
 app_running() { [ "$(docker inspect -f '{{.State.Running}}' "$(app_cname "$1")" 2>/dev/null || echo false)" = "true" ]; }
@@ -767,8 +793,14 @@ apps_list_json() {
     # Published URLs remain CLI/operator diagnostics, not browser fallbacks.
     if [ -n "$web" ]; then
       wmode="$(app_field "$id" webMode)"; wmode="${wmode:-proxy}"
-      printf ',"web":{"hostPort":"%s","containerPort":"%s","url":"%s","path":"/apps/web/%s/","mode":"%s"}' \
+      printf ',"web":{"hostPort":"%s","containerPort":"%s","url":"%s","path":"/apps/web/%s/","mode":"%s"' \
         "${web%%:*}" "$wcp" "$(json_escape "$wurl")" "$(json_escape "$id")" "$(json_escape "$wmode")"
+      # webHost opts an app into host mounting: the GUI resolves it by hostname
+      # and serves the app at the ROOT of that name instead of under a path, so
+      # the app needs no base-URL configuration and no URL rewriting.
+      whost="$(app_field "$id" webHost)"
+      [ -n "$whost" ] && printf ',"webHost":"%s"' "$(json_escape "$whost")"
+      printf '}'
     fi
     printf '}'
   done <<<"$(app_ids)"
