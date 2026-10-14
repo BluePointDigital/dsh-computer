@@ -411,19 +411,25 @@ async function main() {
   check('SSE emits first event without waiting for stream completion', () => assert.equal(sse, 'data: first\n\n'))
 
   // ------------------------------------------- real upstream (whoami)
-  let containerIp
+  // A STOPPED container still reports its last IP, so asking only for the address
+  // is not "is it running" — this silently proxied into a dead IP and failed with a
+  // misleading "received the path WITHOUT the mount prefix" (found 2026-10-14 after a
+  // harness restart, where every app is stopped by policy).
+  let containerIp = ''
   try {
-    containerIp = execFileSync(
+    const state = execFileSync(
       'docker',
-      ['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', 'dsh-app-whoami'],
+      ['inspect', '-f', '{{.State.Running}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', 'dsh-app-whoami'],
       { encoding: 'utf8' },
     ).trim()
+    const [running, address] = state.split(' ')
+    if (running === 'true' && address) containerIp = address
   } catch {
     containerIp = ''
   }
 
   if (containerIp === '') {
-    console.log('\nreal upstream (whoami): SKIPPED — container not running')
+    console.log('\nreal upstream (whoami): SKIPPED — dsh-app-whoami is not running (start it with `computer apps up whoami`)')
   } else {
     console.log('\nproxy in front of the real whoami container')
     const realMount = '/apps/web/whoami'
