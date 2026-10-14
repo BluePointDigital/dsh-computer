@@ -19,8 +19,10 @@ whenToUse: >-
 A machine, not a command. This runs **one named container you keep**, with a
 bind-mounted home directory, a virtual display, and passwordless sudo inside.
 
-Everything below was verified against the live box. Error strings are quoted
-verbatim so they can be grepped when they reappear.
+The box notes preserve prior measured behavior; quoted error strings help with
+troubleshooting. **The isolated-origin gateway is implemented/tested source, not deployed**.
+Scratch Chromium acceptance passed; see [verification evidence](<GATEWAY-VERIFICATION.md>).
+Gateway instructions below do not claim production ingress or the live GUI is verified.
 
 ## Quick start
 
@@ -29,10 +31,11 @@ available from every workspace. It resolves state from the directory it is
 *invoked* from — the nearest ancestor containing a `.dsh` marker — so each
 workspace gets its own box, container name, and home directory.
 
-**On a box where this skill was just installed**, run `bin/install.sh` once. It
-wires the GUI menu, builds the box image if absent, and reports whether Docker is
-actually usable. If it reports missing capability, say so plainly rather than
-proceeding — a box with no daemon is a box where this skill cannot work.
+**For a development checkout on a scratch instance**, [bin/install.sh](bin/install.sh)
+wires the GUI menu, builds the box image if absent, and checks Docker. It writes a
+`link:` dependency, not a production release pin. For production follow
+[DEVELOPING.md](DEVELOPING.md), rather than running the checkout installer. If Docker
+capability is missing, say so plainly — without a daemon this skill cannot work.
 
 ```bash
 C=/data/skills/docker-computer/bin/computer
@@ -145,7 +148,8 @@ to confirm a window mapped before screenshotting.
   The profile declares it, but the string `patchReload` occurs **zero** times across
   `/opt/dsh` on 0.2.0-rc.2, and the `hmr` plugin is configured with `root: []`.
   `applyEntryPatches` runs at **boot**; plugin config is consumed in `apply()` at
-  mount. So `install.sh`'s `cordis.patch.yml` insert — the thing that mounts the
+  mount. So [bin/install.sh](bin/install.sh)'s
+  [cordis.patch.yml](cordis.patch.yml) insert — the thing that mounts the
   Applications menu — does **not** appear until the harness restarts. Verified
   2026-10-12 by grep. What *is* live: edits to skill files (the filesystem skill
   watches its roots) and the client half (reloaded on a page refresh, since client
@@ -159,7 +163,8 @@ to confirm a window mapped before screenshotting.
   defaults to `${DSH_HOME:-$HOME}/.dsh-applications`, and resolution falls back to
   the **running container's `VNC_PASSWORD`** -- the daemon is the authority, the file
   is only a cache -- so a lost cache self-heals instead of silently mismatching.
-  `test/apps-password.test.sh` covers the order. Never put state under `$SKILL_DIR`.
+  [test/apps-password.test.sh](test/apps-password.test.sh) covers the order.
+  Never put state under `$SKILL_DIR`.
 - **Apps are ON DEMAND by default — that is now policy, not accident.** `autostart`
   is **false** unless a catalog entry says otherwise, so most containers deliberately
   do *not* return after a harness reboot; `computer apps up <id>` is how they come
@@ -350,8 +355,9 @@ $C apps discover             # local images not yet catalogued
 ```
 
 Shipped: `desktop` (full Debian desktop + viewer on :6081), `shell` (minimal
-Debian with a persistent home), `whoami` and `nginx` (HTTP dashboards, proxied
-same-origin at `/apps/web/<id>/`).
+Debian with a persistent home), `whoami` and `nginx` (HTTP dashboards). Legacy mode
+proxies web apps at `/apps/web/<id>/` on the shared DSH origin. The opt-in gateway
+instead assigns each container identity its own HTTPS origin; see below.
 
 ### Apps are on demand, unless you say otherwise
 
@@ -403,8 +409,8 @@ Reach for this FIRST when a task needs software; most of the time it is the whol
 answer and no review is involved.
 
 **A program on the machine needs the owner.** A managed app gets a name, a named
-volume, a panel and a slot on the DSH origin that outlives your turn and is visible
-to every session. That is what requires `prepare → approve → run`, and the owner's
+volume, a panel and a launch entry that outlives your turn and is visible to every
+session. That is what requires `prepare → approve → run`, and the owner's
 click is the approval — never yours.
 
 The `propose_program` tool is the agent-facing door to that second path. Call it
@@ -447,13 +453,15 @@ is also supported: `computer apps approve <job-id> <hash> --trust-publisher`, th
 `computer apps run <job-id>`. Agent-generated text is not approval.
 
 Supported plan fields: id/name/description, image with tag or digest, webPort,
-webPath, canonical webSockets/webRewrite arrays, integer cpus/memoryMb/shmMb,
-volumes as `[{"target":"/data"}]`, command argv array, env object, viewer/localImage
-booleans, and autostart (false by default). Unknown fields are rejected. No host
-mounts, arbitrary Docker flags, added capabilities, devices or host networking.
-New managed apps publish **no host ports**; the embedded proxy reaches the bridge.
-Docker default capabilities/outbound networking remain. Only trusted publisher
-code should be embedded: same-origin app JavaScript is not isolated from DSH.
+webPath, canonical webSockets/webRewrite arrays (legacy adaptation only), integer
+cpus/memoryMb/shmMb, volumes as `[{"target":"/data"}]`, command argv array, env object,
+viewer/localImage booleans, and autostart (false by default). Unknown fields are
+rejected. No host mounts, arbitrary Docker flags, added capabilities, devices or
+host networking. New managed apps publish **no host ports**; the proxy/gateway
+reaches the bridge. Isolated traffic needs no per-app `webHost`, `webRewrite` or
+`webSockets`. Docker default capabilities/outbound networking remain, and publisher
+trust is still required. Legacy same-origin JavaScript is not isolated from DSH;
+the gateway separates browser origins, not hostile container code or networking.
 
 Preparing review may download an image. Container creation/start happens only
 after approval. Images declaring VOLUME directories must list those targets in
@@ -472,11 +480,11 @@ follow-up, not currently an in-panel volume migration feature.
 
 ### The GUI menu — plugin `dsh-applications`
 
-`lib/` + `package.json` at this skill's root are a DSH client+server plugin that puts the catalog in
-the Web GUI's left sidebar: an **Applications** entry that swaps the main column
-for a panel listing every app, with Launch / Stop / Remove and an embedded live
-viewer. Verified end to end — the embedded view renders a live desktop from a
-separate container inside the DSH main panel.
+The client/server plugin, declared in [package.json](package.json), puts the
+catalog in the Web GUI's left sidebar: an **Applications** entry that swaps the
+main column for a panel listing apps, with lifecycle controls and a viewer.
+Legacy desktop embedding has prior verification; that does not verify the new
+isolated-origin launch or its cookie/browser behavior.
 
 It is a two-slot registration, which is all the layout asks for:
 
@@ -507,11 +515,11 @@ Design notes worth keeping:
   (React included).
 - Client bundle revisions derive from mtime/size, so an edited client half is
   picked up on a **page reload**; the server half needs a DSH restart.
-- The embedded viewer is given the per-app VNC password so it connects without a
-  prompt. Applications stay inside DSH; there is no New tab action or automatic
-  published-origin fallback.
+- The viewer receives the per-app VNC password through the authenticated launch.
+  Gateway mode also offers an authenticated **top-level launch** for incompatible
+  framing/cookies. There is no automatic shared-origin or published-port fallback.
 
-Install — one idempotent command:
+Development checkout install — not a production update:
 
 ```bash
 /data/skills/docker-computer/bin/install.sh          # wire + build + verify
@@ -519,7 +527,7 @@ Install — one idempotent command:
 ```
 
 It declares the plugin in the profile as a `link:` dependency, materializes the
-symlink, appends the `cordis.patch.yml` insert if absent, builds the box image if
+symlink, appends the [cordis.patch.yml](cordis.patch.yml) insert if absent, builds the box image if
 absent, then verifies. Re-running changes nothing (no churn, no spurious backups).
 
 **Why not a hand-made symlink.** It used to be one (`ln -sfn ...`), which worked
@@ -541,13 +549,15 @@ a plain statement of what will not work.
 
 Unmount by removing the insert and the dependency, then `pnpm install`.
 
-### HTTP dashboards — `web:`
+### Legacy HTTP dashboards — `web:` (gateway disabled)
 
-All application views launch through **`/apps/web/<id>/` on the DSH origin**.
-The server reaches the container's private bridge IP; the user's browser only
-needs to reach DSH. Published CLI URLs are operator diagnostics, not panel
-fallbacks. Legacy `viewer:`-only entries receive a web mount and `/websockify`
-automatically. Legacy `webMode: direct` entries show migration guidance instead
+With `appDomain` unset, **legacy shared-origin mode remains the explicit default**:
+application views launch through `/apps/web/<id>/` on the DSH origin. This is not
+an isolation boundary for untrusted JavaScript. The server reaches the container's
+private bridge IP; the user's browser only needs to reach DSH. Published CLI URLs
+are operator diagnostics, not panel fallbacks. Opting into the gateway disables
+this same-origin HTTP access and its WS routes, rather than leaving both open.
+Legacy `viewer:`-only entries receive a web mount and `/websockify` automatically. Legacy `webMode: direct` entries show migration guidance instead
 of an external frame.
 
 The client probes the mount with `HEAD` and requires `x-dsh-app-proxy` to match
@@ -600,7 +610,7 @@ Three things learned the hard way:
   `dsh-host-webserver` matches upgrade routes by pathname only
   (`this.upgrades.get(pathname)`) and the prefix table is not consulted, so a
   prefix upgrade proxy is not possible. The catalog therefore **declares** the
-  socket paths (`webSockets: /websockify`) and `lib/index.js` registers one exact
+  socket paths (`webSockets: /websockify`) and [lib/index.js](lib/index.js) registers one exact
   upgrade route per path per app, dialing the container exactly as the HTTP proxy
   does. Nothing is discovered: a route exists only for a declared path.
 - **Declaring both `viewer:` and `web:` on the same host port is normal.** That is
@@ -608,71 +618,110 @@ Three things learned the hard way:
   duplicate publication is skipped rather than passed to docker, which would fail
   the launch with "address already in use".
 
-### Host-mounted apps — `webHost:`
+### Isolated-origin gateway — instance-wide opt-in
 
-The path mount is the default because it needs nothing but a running DSH. It
-stops working for one specific kind of app: one that computes its own URLs at
-runtime from server config rather than writing them as literals. No amount of
-path rewriting reaches those — `webRewrite` handles literal prefixes only, and
-the proxy cannot know what an app will decide to call itself. Such an app asks
-the origin root for `/api/...`, the harness answers, and the app looks broken
-while the container is perfectly healthy.
+**Tested source, not deployed; production ingress unverified.** Follow the full
+[configuration/ingress contract](INSTALLATION.md#isolated-origin-gateway-opt-in)
+before enabling this mode. Configure these instance-wide plugin fields or their
+environment alternatives (plugin values take precedence):
 
-`webHost: <hostname>` serves that app at the **root of its own name** instead.
-The app then needs no base-URL configuration at all, because it is not being
-lied to: it really is at `/`.
+| Field | Environment | Default / requirement |
+|---|---|---|
+| `appDomain` | `DSH_APPS_DOMAIN` | exact harness hostname, without `*.`; unset keeps legacy mode |
+| `controlOrigin` | `DSH_APPS_CONTROL_ORIGIN` | required exact HTTPS DSH origin, no path/trailing slash |
+| `appIngressPeers` | `DSH_APPS_INGRESS_PEERS` | exact private socket-peer IP array; comma-separated env, default `127.0.0.1,::1` |
+| `appListenHost` | `DSH_APPS_HOST_BIND` | private listener bind, default `127.0.0.1` |
+| `appListenPort` | `DSH_APPS_HOST_PORT` | private HTTP listener, default `3099` |
+| `appPublicPort` | `DSH_APPS_PUBLIC_PORT` | browser-facing HTTPS port, default `443` |
 
-```yaml
-  - id: filebrowser
-    name: File Browser
-    image: filebrowser/filebrowser:v2.63.23
-    web: 8080:80
-    webHost: files.example.com
+[lib/app-launch.js](lib/app-launch.js) generates
+`https://<id>-<identity hash>.<domain>` automatically, using immutable container
+identity and installation owner where present. No per-app `webHost`, `webRewrite`
+or `webSockets` is needed for isolated traffic. The web port and entry path are
+still required app facts. Unknown names do not route merely because wildcard DNS
+exists. Restarting the same container preserves the host; replacing it gives a
+**new origin**, so old service workers/storage cannot silently follow a reused
+container name. Reopen through Applications after replacement; app-side callback
+or public-URL settings may also need updating.
+
+Gateway mode **disables same-origin app HTTP and WebSocket access**. Bad settings,
+missing identity, listener failure, cookie failure or an unavailable backend fail
+closed, without shared-origin or raw-port fallback. The separate listener exists
+because DSH's web router is pathname-based, not because DSH lacks login: it **has
+browser authentication**, and control APIs retain the platform authentication gate.
+
+#### One wildcard ingress, with a real private boundary
+
+Configure wildcard DNS/TLS once for **`*.<exact-harness-hostname>`**. Set
+`appDomain` to the full hostname in `controlOrigin`: `dev.bluepointdigital.com`
+uses `*.dev.bluepointdigital.com`, and `otherdsh.bluepointdigital.com` uses
+`*.otherdsh.bluepointdigital.com`. Keep the exact harness host routed to DSH,
+not the app gateway. This is origin isolation, not site isolation: retain
+host-only control cookies and exact-Origin checks.
+**TLS-only browser access and BYPASS ALL shared ingress/CDN cache for the entire
+app wildcard are mandatory**, including assets even when marked `public` or
+`immutable`. A shared cache could answer without the gateway's auth check. Purge
+old cached content and disable caching at every shared hop; app browser-local
+cache behavior remains upstream-controlled.
+
+Keep the gateway private with network reachability restricted to ingress plus an
+exact **socket peer IP** allowlist, never `X-Forwarded-For`/CIDR/header-based trust.
+In the actual NPM bridge topology, NPM and DSH are separate containers; NPM's
+loopback is not DSH's loopback. Determine the private DSH interface reachable from
+NPM and the peer IP DSH actually observes, accounting for NAT. Set bind/upstream
+and peers from those facts; do not assume `127.0.0.1:3099` is reachable from NPM,
+or expose the port publicly to make it reachable.
+
+Do not copy control-host Basic authentication, login middleware or credential
+injection onto wildcard app hosts. Preserve app-owned `Authorization` (including
+app Basic/Bearer auth). The gateway sends verified public Host/proto/port, strips
+untrusted forwarding assertions and private DSH/gateway cookies, and retains app
+credentials; it does not inject the user's DSH login into an app.
+
+#### Launch, cookies and compatibility
+
+The authenticated control origin issues a **60-second single-use ticket**. The
+app-host bootstrap exchanges it for an **8-hour Secure, HttpOnly, host-only
+Partitioned cookie** (`SameSite=None`, `Path=/`, no Domain). Tickets travel in a
+fragment, not reusable query URLs. [lib/app-sessions.js](lib/app-sessions.js) keeps
+tickets/sessions only in memory, bound to the origin and identity: expiry or server
+restart means reopen from Applications. Both HTTP and WS require the app session;
+mutating HTTP and WS additionally require that app's Origin. App login remains
+the app's responsibility.
+
+An authenticated **top-level launch** is available for iframe/cookie incompatibility;
+it issues a fresh ticket rather than bypassing access checks. Do not promise
+universal embedding or zero app configuration. Apps may still need public URL,
+OAuth callback or trusted-proxy settings. Preserve app **CSP and X-Frame-Options**;
+never weaken them just to force a frame to work.
+
+[lib/host-listen.js](lib/host-listen.js) uses `httpxy` pinned to `0.5.5` in
+[package.json](package.json). It forwards app paths/bodies without legacy content
+rewrites and retains ordinary app response semantics. The earlier claim that the
+legacy [lib/proxy.js](lib/proxy.js) is transparent at `mount = ''` was wrong: it is
+still a transforming proxy. Do not restore that path as the isolated transport.
+
+#### Release and verification are separate
+
+Install a reviewed release and restart the server before expecting gateway source
+changes to run; a page refresh alone is insufficient. Never restart mid-turn.
+See [DEVELOPING.md](DEVELOPING.md) for the release/dependency procedure. Suggested
+checkout commands (recorded results and scope are in [verification evidence](<GATEWAY-VERIFICATION.md>)):
+
+```bash
+npm ci --legacy-peer-deps
+npm test
+node --test test/host-router.test.mjs test/host-mount-apply.test.mjs
+npm run test:gateway                # opt-in; requires existing running desktop
 ```
 
-What the implementation does, and does not do:
-
-- **Nothing is rewritten.** At `mount = ''` the redirect, cookie and CSP helpers
-  in `lib/proxy.js` are already no-ops or the correct root form; `rewriteLocation`
-  returns locations unchanged, `scopeCookie` writes `Path=/`. `webRewrite` is
-  neither needed nor consulted. If a host-mounted app ever needs a rewrite, that
-  is a signal something is wrong, not a field to add.
-- **Matching is EXACT** (`lib/host-router.js`). There is deliberately no
-  `*.example.com` rule: with a wildcard DNS record and a wildcard certificate, a
-  suffix rule would forward *any* name under the domain to a container, which
-  turns a typo or an attacker-chosen name into a reachable backend. The reachable
-  set stays equal to the declared set.
-- **The app sees the container address as `Host`**, not the public hostname, the
-  same as the path mount. The public name is the front door's, and forwarding it
-  invites host-header confusion.
-- **It is its own listener, not a DSH route.** `dsh-host-webserver` matches by
-  pathname only and its one arbitrary-path seat (`registerFallback`) is held by
-  the SPA server, so the plugin listens separately — default
-  `127.0.0.1:3099`, overridable with `DSH_APPS_HOST_PORT` and
-  `DSH_APPS_HOST_BIND`. Binding beyond loopback logs a warning and is a real
-  decision: **the harness has no login, so anything that reaches that port skips
-  whatever fronts the instance.**
-- **The container address is resolved per request**, so a restarted app on a new
-  IP is followed. Only the hostname → app map is cached, keyed to the catalog's
-  own stamp.
-- **A bad `webHost` fails at catalog load**, not at request time: a malformed
-  name, a missing `web:`, or the same host on two apps are all `apps_validate`
-  errors. Anonymous 404s are what this prevents — a name that cannot be
-  normalized would otherwise present as a live port with no clue which line
-  caused it.
-- **WebSockets are carried automatically**, with no `webSockets:` declaration:
-  the listener owns the upgrade for every routed host. The path mount still
-  requires declared paths, because its upgrades are exact DSH routes.
-
-Deployment is deliberately out of scope and belongs to whatever fronts the
-instance: point the name at the host, terminate TLS, and forward to
-`127.0.0.1:3099`. The path mount keeps working alongside, so no app has to move.
-
-Verified end to end against real File Browser (`test/host-mount-live.mjs`,
-skipped when the container is absent): the app root serves the app, its injected
-`BaseURL` is empty and correct, `POST /api/login` reaches the app and returns the
-app's own 403 rather than the harness 404, and a root-absolute `/static/...`
-asset is served by the app.
+The deterministic [host-router test](<test/host-router.test.mjs>) and
+[host-mount-apply test](<test/host-mount-apply.test.mjs>) cover the authenticated
+gateway. The [browser fixture](<test/gateway-browser.test.mjs>) passed in Chromium
+154 using scratch HTTPS ingress and a synthetic control page. Earlier hostname
+listener results are not gateway evidence; [host-mount-live.mjs](<test/host-mount-live.mjs>)
+is retired. See [measured scope and limitations](<GATEWAY-VERIFICATION.md>).
+Production ingress and the installed DSH shell/auth remain unverified.
 
 ## Verify before trusting
 

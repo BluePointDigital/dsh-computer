@@ -53,9 +53,9 @@ test('manifest: the plugin declares what it is compatible with', () => {
   }
 })
 
-test('manifest: the dsh.engines declaration matches the peer range', () => {
-  const engines = manifest.dsh?.engines
-  assert.ok(engines && typeof engines.dsh === 'string', 'dsh.engines.dsh must be declared')
+test('manifest: the top-level engines declaration matches the peer range', () => {
+  const engines = manifest.engines
+  assert.ok(engines && typeof engines.dsh === 'string', 'engines.dsh must be declared')
   assert.equal(engines.dsh, manifest.peerDependencies['@deepseek-ai/dsh'],
     'the human-facing declaration and the gate-visible one must not drift')
 })

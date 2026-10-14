@@ -1,92 +1,187 @@
 # Developing this repo
 
-Two install shapes, one script. Knowing which one you are about to produce is the
-whole game — they are not interchangeable, and `install.sh` silently switches
-between them.
+Development, release installation and activation are separate operations. The
+isolated-origin gateway described here is **implemented/tested source, not deployed**.
+Deterministic tests and scratch Chromium acceptance passed; production GUI/ingress
+verification is still separate. See [verification evidence](<GATEWAY-VERIFICATION.md>).
 
 ## Where this lives
 
 This repo root **is** a DSH workspace: `/workspace/dsh-computer`, with a `.dsh/`
-marker at the root. So a session started here resolves its own box identity
+marker at the root. A session started here resolves its own box identity
 (`computer status` reports `dsh-computer-f78d205b`, distinct from the box belonging
-to `Docker Testing`), and the `docker-computer` skill is available from it because
-that skill is installed system-wide at `/data/skills/docker-computer`.
+to `Docker Testing`). The `docker-computer` skill is available system-wide at
+`/data/skills/docker-computer`.
 
 The repo root doubling as the workspace root means workspace-local state
 (`.dsh-computer/`, `.dsh/`) lands beside the source, and both are gitignored.
-
-This folder is inside the Syncthing tree, so source replicates to
-the Windows peer — which is intended, since `node_modules` and the box home are
-excluded by `/workspace/.stignore`.
+This folder is in the Syncthing tree: source replicates to the Windows peer,
+while dependencies and the box home are excluded by
+[the workspace ignore rules](/workspace/.stignore). Do not put private state here.
 
 ## The two shapes
 
 | | Production | Development |
 |---|---|---|
-| Profile specifier | `github:BluePointDigital/dsh-computer#v0.1.8` | `link:/path/to/checkout` |
-| `node_modules/dsh-applications` | a fetched tarball | a **symlink** to your checkout |
-| Edits take effect | only after a re-install | immediately (client half on page reload) |
-| Reproducible | yes — pinned + integrity hash | no — whatever is on disk |
-| How you get it | edit `package.json`, `pnpm install` | `bin/install.sh` from the checkout |
+| Profile specifier | `github:BluePointDigital/dsh-computer#<release-tag>` | `link:/path/to/checkout` |
+| `node_modules/dsh-applications` | a fetched release | a **symlink** to your checkout |
+| Edits take effect | only after installing the new release, then activation below | files change immediately; loaded server modules still need a restart |
+| Reproducible | pinned release + lockfile | whatever is on disk |
+| How you get it | edit profile dependency, `pnpm install` | [bin/install.sh](bin/install.sh) from the checkout |
 
-**`bin/install.sh` always produces the `link:` shape** (`WANT_LINK="link:$REL_PATH"`),
-and it *refuses* to proceed when the profile declares a `github:` specifier.
-
-> **The footgun:** running `bin/install.sh` from a checkout against a live profile
-> **converts production into development**. That is fine on a scratch instance and
-> wrong on one you care about. Read what it reports before accepting it.
+**[bin/install.sh](bin/install.sh) always produces the `link:` shape**
+(`WANT_LINK="link:$REL_PATH"`) and refuses a profile declaring a `github:` specifier.
+Do not remove that guard to update production. Deliberately changing the profile
+to `link:` converts production into development; that belongs on a scratch instance,
+not an instance that should stay release-pinned.
 
 ## Releasing (the production path)
 
 ```bash
-# 1. in the checkout: bump and commit
-$EDITOR package.json          # version, e.g. 0.1.8 -> 0.1.9
-git add -A && git commit -m "0.1.9: ..."
-git tag -a v0.1.9 -m "0.1.9: ..."
-git push origin main v0.1.9
+# 1. In the checkout: review the intended diff, test, bump and commit.
+$EDITOR package.json
+# Stage only the intended release changes, then commit/tag/push that release.
+git add <reviewed-files>
+git commit -m "<version>: <release summary>"
+git tag -a v<version> -m "<release summary>"
+git push origin main v<version>
 
-# 2. on each instance: point the profile at the new tag
-#    (currently olympus, director and dsh-damon)
-$EDITOR /data/profiles/web/package.json     # #v0.1.8 -> #v0.1.9
+# 2. On each instance, separately: point the profile at the released tag.
+$EDITOR /data/profiles/web/package.json
+# Run in the profile directory:
 pnpm install --no-frozen-lockfile
 
-# 3. verify, do not assume
+# 3. Activate as appropriate below; then verify the installed package and GUI.
 /data/skills/docker-computer/bin/computer apps list --json
 ```
 
-A version bump is cheap; the install is a few seconds. **Prefer it over `link:` for
-anything you intend to keep**, because a pinned tag is the only shape that survives
-a `pnpm install` without the whole dependency being replaced.
+A checkout edit or documentation update does not perform any of these deployment
+steps. Prefer a pinned release over `link:` for anything intended to remain in
+production. Installing dependencies may replace package directories; durable state
+must not live inside them.
 
 ## What needs a restart, and what does not
 
-- **`lib/index.js` (server half) — restart.** It is loaded once at mount.
-- **`lib/client.js` (client half) — page reload.** Bundle revisions derive from mtime/size.
-- **`bin/computer` (the CLI) — nothing.** It is executed per invocation, read from disk.
-- **`SKILL.md` — nothing.** The filesystem skill watches its roots.
-- **`cordis.patch.yml` (patch layer) — restart, always.** `patchReload: "live"` is
-  **inert** on 0.2.0-rc.2: the string occurs zero times across `/opt/dsh` and `hmr`
-  is configured `root: []`.
+- **[lib/index.js](lib/index.js) and imported server modules — restart.** This
+  includes [lib/app-launch.js](lib/app-launch.js),
+  [lib/app-sessions.js](lib/app-sessions.js) and
+  [lib/host-listen.js](lib/host-listen.js): they are loaded at mount.
+- **[lib/client.js](lib/client.js) — page reload** after the intended installed
+  file/bundle is available. Bundle revisions derive from mtime/size; checkout edits
+  do not reach a production pin. Do not promise HMR without its active watcher.
+- **[bin/computer](bin/computer) — no harness restart.** Executed per invocation.
+- **[SKILL.md](SKILL.md) — no harness restart.** The filesystem skill watches roots.
+- **[cordis.patch.yml](cordis.patch.yml) / instance patch layer — restart.**
+  `patchReload: "live"` is inert on 0.2.0-rc.2; `hmr` has `root: []`. Gateway
+  settings and environment are consumed at server startup, not on page refresh.
+
+Never restart the harness mid-turn. A restart invalidates memory-only gateway
+sessions/tickets; users reopen apps from Applications. Verify the existing GUI
+URL after activation and refresh, not a replacement server.
+
+## Gateway architecture and configuration
+
+[INSTALLATION.md](INSTALLATION.md#isolated-origin-gateway-opt-in) is the operator
+contract, including all six instance-wide settings and environment alternatives:
+`appDomain`, `controlOrigin`, `appIngressPeers`, `appListenHost`, `appListenPort`,
+`appPublicPort`. `appDomain` absent means explicit **legacy shared-origin mode**;
+setting it opts the instance into isolated origins, not a per-app mix-and-match.
+
+- [lib/app-launch.js](lib/app-launch.js): validates policy and emits
+  `https://<id>-<identity hash>.<domain>`. Immutable container identity plus install
+  owner where present determines the hash. Stopping/restarting the same container
+  preserves its origin; replacement changes it, even if the app/container name is
+  reused. Never reuse an origin for a replacement trust identity.
+- [lib/app-sessions.js](lib/app-sessions.js): 60-second single-use DSH-issued launch
+  tickets, then 8-hour Secure/HttpOnly/host-only `Partitioned` app-session cookies.
+  Credentials from the control origin never become app credentials. Sessions are
+  memory-only and bound to the app origin and identity.
+- [lib/host-listen.js](lib/host-listen.js): private listener, exact ingress socket
+  peer allowlist, exact generated-host routing, authenticated HTTP and WebSockets.
+  Uses **`httpxy` pinned to `0.5.5`** in [package.json](package.json), not
+  [lib/proxy.js](lib/proxy.js) with an empty mount. The latter is a transforming
+  legacy proxy, not a transparent transport. Gateway preserves app paths, bodies,
+  redirects, cookies (except reserved gateway/control cookies), CSP and XFO.
+  It preserves application `Authorization`, strips private/control credentials
+  and untrusted forwarding assertions, then sets verified public Host/proto/port.
+- [lib/index.js](lib/index.js): DSH-authenticated control launch and lifecycle.
+  Gateway mode disables **both** same-origin HTTP app access and legacy WS routes.
+  Bad configuration, an unavailable listener, session failure or upstream failure
+  is an error, **never** a reason to fall back to the shared origin or raw app port.
+
+Isolated traffic needs no per-app `webHost`, `webRewrite` or `webSockets` entry.
+The entry port/path are still real application facts; do not guess them. Serving
+an app at `/` does not configure its public URL, OAuth callbacks or trusted-proxy
+policy. Retain upstream frame protection and offer an authenticated top-level
+launch when an iframe or partitioned-cookie flow is incompatible.
+
+### Ingress is part of the security boundary
+
+The standard layout is `*.<exact-harness-hostname>`: set `appDomain` to the
+hostname in `controlOrigin`, including every subdomain label. Configure wildcard
+DNS and TLS **once** there; keep the exact harness host routed to DSH and the
+wildcard routed to the private gateway. These are distinct origins, not distinct
+sites; host-only control cookies and exact-Origin checks remain necessary.
+**TLS-only browser access and BYPASS ALL shared ingress/CDN caching for the entire
+app wildcard are mandatory.** Cacheable upstream assets may still be private: a cache ahead of the
+gateway can serve them without its session check. Browser-local caching is
+separate and remains governed by app response headers.
+
+Use a private gateway interface with firewall/network reachability limited to the
+trusted ingress and an exact socket-peer IP allowlist. Do not infer trust from
+`X-Forwarded-For`, CIDR ranges or a caller-supplied proxy header. In the NPM setup,
+NPM and DSH are separate containers connected through a bridge: `127.0.0.1:3099`
+inside NPM is **not** the DSH listener. Discover the actual bridge-facing DSH
+address and the NPM source address as observed by DSH; defaults of loopback bind
+and peers only suit a same-network-namespace ingress. Never expose the listener
+publicly to compensate for a bad upstream address.
+
+Do not copy control-host Basic auth, login middleware or credential injection to
+the wildcard app hosts. Keep app `Authorization` intact, including app-owned Basic
+or Bearer auth. DSH itself **does** have browser authentication; the control APIs
+must continue using `ctx.connection.requestRejection(req)`. App data-plane access
+uses the separate gateway session, not a second forwarded DSH login.
 
 ## Where state lives
 
-Application state (per-app VNC passwords) is at **`$DSH_HOME/.dsh-applications`**,
-overridable with `COMPUTER_APPS_STATE`. It is deliberately **not** under the skill
-directory: that resolves through a symlink into a pnpm-managed package, which any
-`pnpm install` replaces wholesale and which silently deleted every password once.
+Per-app VNC passwords live at **`$DSH_HOME/.dsh-applications`**, overridable with
+`COMPUTER_APPS_STATE`. This is deliberately outside the skill symlink and managed
+package directory, where a dependency reinstall once deleted every password.
 Resolution falls back to the running container's `VNC_PASSWORD`, so a lost cache
-self-heals instead of silently mismatching.
+self-heals. Installed registries, import metadata, jobs and private env files share
+that private root; see [INSTALLATION.md](INSTALLATION.md). Gateway sessions are not
+persisted there and expire on process restart.
 
-## Tests
+## Tests (commands, not results)
+
+Install checkout dependencies reproducibly with
+[npm's lockfile](package-lock.json); `--legacy-peer-deps` avoids trying to resolve
+the DSH host peer packages as standalone npm dependencies. This is separate from
+a production profile's `pnpm install`.
 
 ```bash
-bash test/apps-password.test.sh     # 12 checks: password resolution order
-node test/proxy.test.mjs            # rewrites, gzip guard, SSE, real socket frames
-npm test                          # deterministic installer + existing regressions
-RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs  # isolated real UI/daemon
-RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional real-browser integration
+npm ci --legacy-peer-deps
+bash test/apps-password.test.sh     # password resolution order
+node test/proxy.test.mjs            # legacy rewrites, gzip guard, SSE, real WS frames
+npm test                           # deterministic installer + existing regressions
+node --test test/host-router.test.mjs test/host-mount-apply.test.mjs
+RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs
+RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs
+npm run test:gateway                # opt-in; requires existing running desktop
 ```
 
-`bin/install.sh verify` checks the mount, the patch insert, the app catalog and the
-daemon — run it after any layout change. A green check is a claim about what was
-checked, not about what works; that distinction has cost this repo three bugs.
+The deterministic [host-router test](<test/host-router.test.mjs>) and
+[host-mount-apply test](<test/host-mount-apply.test.mjs>) cover the authenticated
+gateway. The [browser fixture](<test/gateway-browser.test.mjs>) passed in Chromium
+154 against scratch HTTPS ingress and a synthetic control page in both nested
+same-site and separate-site layouts, including the production iframe sandbox flags.
+Same-site iframe HTML downloads pass; see [measured results](<GATEWAY-VERIFICATION.md>)
+for the cross-site download-attribute limitation and verified top-level fallback.
+The previous [host-mount-live.mjs](<test/host-mount-live.mjs>) is retired.
+Actual production DNS/TLS, cache bypass, socket peers and installed DSH shell/auth
+still require verification after a separately authorized release/install/restart.
+
+`bin/install.sh verify` is a diagnostic of mount/patch/catalog/daemon wiring, not a
+gateway or browser acceptance test. Do not run the installing form on production.
+Source test results do not imply a production installation or restart. A green
+check is a claim about what was checked, not about what works.

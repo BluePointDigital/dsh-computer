@@ -2,94 +2,127 @@
 
 This repo root is also a DSH workspace (`/workspace/dsh-computer`, `.dsh/` marker).
 The `docker-computer` skill is installed system-wide at `/data/skills/docker-computer`,
-so it is available here without being copied. Full detail in `DEVELOPING.md` and
-`SKILL.md`; this file is the short version that matters before you touch anything.
+so it is available here without being copied. Full detail in [DEVELOPING.md](DEVELOPING.md),
+[SKILL.md](SKILL.md) and [INSTALLATION.md](INSTALLATION.md); this is the short version.
 
-## The one thing that will bite you
+## Release is not development
 
-`bin/install.sh` **always** writes a `link:` dependency and **refuses** a `github:`
-one (`WANT_LINK="link:$REL_PATH"`). Running it from a checkout against a live
-profile therefore **converts production into development**. The deployed shape on
-every instance is the pinned GitHub tag:
+[bin/install.sh](bin/install.sh) **always** writes a `link:` dependency
+(`WANT_LINK="link:$REL_PATH"`) and **refuses** a `github:` specifier. Its purpose is
+checkout installation, not updating a production release pin. Switching a live
+profile to that shape converts production into development.
 
+Production uses a pinned GitHub release, not this checkout:
+
+```text
+"dsh-applications": "github:BluePointDigital/dsh-computer#<release-tag>"
 ```
-"dsh-applications": "github:BluePointDigital/dsh-computer#v0.1.8"
-```
 
-To deploy a change, use the release loop — never `install.sh` on a live instance:
-
-```bash
-# 1. here: bump version, commit, tag, push
-# 2. per instance: repoint the tag in /data/profiles/web/package.json
-#                  then: pnpm install --no-frozen-lockfile
-```
+To deploy a change, use the release loop in [DEVELOPING.md](DEVELOPING.md): bump,
+review, commit, tag, push; then repoint each instance's profile dependency and run
+`pnpm install --no-frozen-lockfile`. Never use the checkout installer as a shortcut
+on a live instance. **The isolated-origin gateway is source work, not a deployed
+feature.** Deterministic regressions and scratch Chromium gateway acceptance passed;
+the production GUI/ingress remains unverified. See [verification evidence](<GATEWAY-VERIFICATION.md>).
 
 ## What needs a restart
 
-| Changed | Effect |
+| Changed | Effect after installing the intended release |
 |---|---|
-| `lib/index.js` (server half) | needs a `dsh web` restart |
-| `lib/client.js` (client half) | picked up on a **page reload** |
-| `bin/computer` (CLI) | nothing — read from disk per invocation |
-| `SKILL.md`, this file | nothing — the filesystem skill watches its roots |
-| `cordis.patch.yml` (a patch layer) | **restart, always** — `patchReload: "live"` is inert on 0.2.0-rc.2 |
+| [lib/index.js](lib/index.js) or server modules it imports, including gateway/session code | needs a `dsh web` restart |
+| [lib/client.js](lib/client.js) | picked up on a **page reload** |
+| [bin/computer](bin/computer) | read from disk per invocation |
+| [SKILL.md](SKILL.md), this [AGENTS.md](AGENTS.md) | filesystem instruction/skill roots are watched |
+| [cordis.patch.yml](cordis.patch.yml) / instance patch configuration | **restart, always** — `patchReload: "live"` is inert on 0.2.0-rc.2 |
 
-Never restart mid-turn.
+Never restart mid-turn. A development edit does not update a production-pinned
+package; installing a server change does not reload an already-running server.
 
-## State
+## State and approval
 
-App state (per-app VNC passwords) lives at `$DSH_HOME/.dsh-applications`, never
-under the skill directory — that resolves through a symlink into a pnpm-managed
-package, which any `pnpm install` replaces wholesale and which silently deleted
-every password once. Resolution falls back to the running container's
+App state (per-app VNC passwords) lives at `$DSH_HOME/.dsh-applications`, overridable
+with `COMPUTER_APPS_STATE`, never under the skill directory. That directory resolves
+through a symlink into a pnpm-managed package, which an install replaces; this once
+silently deleted every password. Resolution falls back to the running container's
 `VNC_PASSWORD`, so a lost cache self-heals.
 
-New installed applications use the same private root for versioned registry,
-progress journals and private env files. CLI and server share AppManager; agent
-setup may prepare plans but must never approve/execute on the human's behalf.
-Do not put credentials or the registry in a synced workspace/package directory.
-Read INSTALLATION.md before altering installation/recovery behavior.
+Installed applications use the same private root for versioned registry, progress
+journals and private env files. CLI and server share AppManager; agents may prepare
+plans but must never approve/execute on the human's behalf. Do not put credentials
+or the registry in a synced workspace/package directory. Read
+[INSTALLATION.md](INSTALLATION.md) before altering installation/recovery behavior.
+
+## Isolated-origin gateway — opt in once per instance
+
+Read the [configuration and ingress contract](INSTALLATION.md#isolated-origin-gateway-opt-in)
+first. [lib/app-launch.js](lib/app-launch.js) defines instance-wide `appDomain`,
+`controlOrigin`, `appIngressPeers`, `appListenHost`, `appListenPort` and
+`appPublicPort`, with environment alternatives documented there. An unset
+`appDomain` keeps the **explicit legacy default** at `/apps/web/<id>/`; those apps
+share DSH's browser origin and must be trusted. DSH has browser authentication:
+control routes use `ctx.connection.requestRejection(req)`, not a Host-only fence.
+
+With gateway mode enabled:
+
+- Hosts are automatic: `https://<id>-<identity hash>.<domain>`. The identity includes
+  the immutable container ID (and installation owner where present), not just its
+  reusable name. Replacement gets a **new origin**; old storage/service workers
+  must not inherit the replacement. Unknown hosts and missing identities fail closed.
+- **Same-origin app HTTP and WebSocket access are disabled.** Listener, launch,
+  cookie or ingress failures must not fall back to the legacy proxy or a published
+  container port. There is no per-app `webHost`, `webRewrite` or `webSockets` recipe
+  needed for isolated traffic.
+- Configure one wildcard DNS/TLS ingress. **TLS-only and BYPASS ALL shared
+  ingress/CDN cache are mandatory**, including app assets. Keep the gateway private
+  and allow only exact ingress **socket peer** IPs, never forwarded identity headers.
+  NPM runs across a container bridge here: its loopback is not DSH's loopback.
+  Confirm the actual private interface and peer addresses before configuring them.
+- Standard layout: **`*.<exact-harness-hostname>`**, even when DSH is already on a
+  subdomain. Set `appDomain` to that exact hostname, without `*.`; keep the harness
+  apex on its existing route. Distinct origins are not distinct sites; retain
+  host-only control cookies and exact-Origin checks. Do not inject Basic auth or
+  DSH/control authentication on app hosts;
+  preserve application `Authorization`. DSH authenticates launch on the control
+  origin, then issues a 60-second single-use ticket. App sessions use an 8-hour,
+  Secure, HttpOnly, host-only `Partitioned` cookie, never a DSH credential.
+- [lib/host-listen.js](lib/host-listen.js) uses pinned `httpxy`, **not** the legacy
+  empty-mount rewriting proxy. Preserve upstream CSP/X-Frame-Options. Root hosting
+  removes path rewriting, not every app setting: public URL, OAuth callbacks or
+  trusted proxies can still need configuration. Use the authenticated top-level
+  launch when framing/cookies are incompatible; never weaken protections to embed.
+
+[lib/app-sessions.js](lib/app-sessions.js) owns memory-only tickets and sessions;
+server restart/disposal invalidates them, so reopen from Applications.
+[lib/index.js](lib/index.js) gates control requests and owns gateway lifetime.
 
 ## Before you claim something works
 
-The suites exist because verification, not code, was the source of every bug here:
+Dependencies include exact-pinned `httpxy` in [package.json](package.json). In a
+checkout, use the lockfile install before running the intended tests:
 
 ```bash
-bash test/apps-password.test.sh     # 12 checks: password resolution order
-node test/proxy.test.mjs            # HTTP/JS rewrites, gzip guard, SSE, real WebSocket frames
-npm test                          # all deterministic installer/proxy/CLI regressions
-node test/host-mount-live.mjs       # real app served at a hostname root (skips if absent)
-RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs  # isolated Add app → Docker → iframe
-RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs   # optional: real Chromium + running desktop
+npm ci --legacy-peer-deps
+bash test/apps-password.test.sh     # password resolution order
+node test/proxy.test.mjs            # legacy rewrites, gzip guard, SSE, real WS frames
+npm test                           # deterministic installer/proxy/CLI regressions
+node --test test/host-router.test.mjs test/host-mount-apply.test.mjs
+RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs
+RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs
+npm run test:gateway                # opt-in; requires existing running desktop
 ```
 
-`upgrade-route.test.mjs` mocks CLI/daemon responses but uses real HTTP/WebSocket
-connections; it creates/deletes no containers and needs no Docker. The optional
-`desktop.test.mjs` uses isolated headless Chromium inside an already-running
-`dsh-app-desktop`, without touching its live browser or the harness.
-`host-mount-live.mjs` attaches to an already-running app (default
-`dsh-app-filebrowser`) and starts its own listener on an ephemeral port; it
-creates nothing and skips loudly when the container is absent.
+The deterministic [host-router test](<test/host-router.test.mjs>) and
+[host-mount-apply test](<test/host-mount-apply.test.mjs>) cover the authenticated
+gateway. [Chromium acceptance](<test/gateway-browser.test.mjs>) passed against
+scratch HTTPS ingress, a synthetic control page and the real gateway transport;
+this is not production DNS/TLS/CDN or installed-DSH-shell acceptance.
+See [measured results and limitations](<GATEWAY-VERIFICATION.md>).
+[upgrade-route.test.mjs](test/upgrade-route.test.mjs) uses mocked CLI/daemon responses
+and real HTTP/WebSockets, without creating containers.
+[desktop.test.mjs](test/desktop.test.mjs) uses isolated headless Chromium inside an
+already-running desktop, without touching its live browser or the harness.
+The old [host-mount-live.mjs](test/host-mount-live.mjs) fixture targets the previous
+hostname listener; do not use it to certify the new authentication/ingress contract.
 
-## Host-mounted apps (`webHost`)
-
-Two ways to publish a web app, and the choice is not cosmetic. `/apps/web/<id>/`
-is the default and needs nothing but a running DSH, but it only works for apps
-that write their URLs as literals — an app that computes them at runtime keeps
-calling the origin root, which is the harness, and looks broken while healthy.
-`webHost: <name>` serves such an app at the root of its own name, where its
-self-derived URLs are correct and **nothing needs rewriting**.
-
-`lib/host-router.js` holds the pure decisions (normalize, index, exact-match);
-`lib/host-listen.js` owns the listener. Both are unit-tested, and the load-bearing
-assertion is that a root-absolute path reaches the app unchanged — under the path
-mount that same request is the bug. If you ever find yourself wanting a rewrite
-rule for a host-mounted app, the routing is wrong, not the app.
-
-Two constraints worth knowing before changing this. `dsh-host-webserver` matches
-by pathname only and its arbitrary-path seat is already held by the SPA server,
-which is why this is a separate listener rather than a DSH route. And it binds
-loopback by default because the harness has no login: widening `DSH_APPS_HOST_BIND`
-widens what is reachable without passing whatever fronts the instance.
-
-A green check is a claim about what was checked, not about what works.
+A green check is a claim about what was checked, not about what works. Source test
+results do not imply a production installation, restart or live deployment.

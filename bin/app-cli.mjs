@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { AppManager, recipes } from '../lib/app-manager.js'
 import { ExistingApps } from '../lib/existing-apps.js'
+import { describeApps, gatewayConfig } from '../lib/app-launch.js'
 const exec = promisify(execFile)
 const bin = fileURLToPath(new URL('./computer', import.meta.url))
 const args = process.argv.slice(2)
@@ -36,9 +37,7 @@ try {
   else if(command==='cancel') json({ok:true,job:await manager.cancel(rest[0])})
   else if(command==='recover') json({ok:true,recovered:await manager.recover()})
   else if(command==='list' || command==='ls') {
-    const apps=[...await legacy(),...await manager.list(),...await existing.list()]
-    const ids=new Set()
-    for(const app of apps){if(ids.has(app.id))throw Error('Duplicate legacy/installed app id: '+app.id);ids.add(app.id)}
+    const apps=describeApps([...await legacy(),...await manager.list(),...await existing.list()],gatewayConfig())
     if(rest.includes('--json'))json({ok:true,schemaVersion:1,apps})
     else { console.log('ID\tNAME\tSTATE\tSOURCE');for(const app of apps)console.log([app.id,app.name,app.state,app.managed?'installed':'catalog'].join('\t')) }
   }else {

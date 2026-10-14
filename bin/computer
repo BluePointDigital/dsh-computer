@@ -754,10 +754,12 @@ apps_list_json() {
     printf '{"id":"%s","name":"%s","description":"%s","image":"%s","state":"%s","autostart":%s' \
       "$(json_escape "$id")" "$(json_escape "$nm")" "$(json_escape "$ds")" \
       "$(json_escape "$img")" "$st" "$auto"
-    # Socket paths the app needs forwarded, as a JSON array. The GUI registers
-    # one exact upgrade route per entry under the mount; see the comment on
-    # `webSockets` in apps.yaml for why they must be declared rather than
-    # discovered.
+    # Immutable identity makes automatic app origins safe across replacement.
+    local cid
+    cid="$(docker inspect -f '{{.Id}}' "dsh-app-$id" 2>/dev/null)" || cid=""
+    [[ "$cid" =~ ^[a-f0-9]{64}$ ]] && printf ',"containerId":"%s"' "$cid"
+    # Legacy path-mount recipes only: exact socket routes and JS URL prefixes.
+    # The isolated gateway forwards arbitrary paths without these declarations.
     for key in webSockets webRewrite; do
       read -r -a paths <<<"$(app_field "$id" "$key")"
       if [ "$key" = webSockets ] && [ ${#paths[@]} -eq 0 ] && [ -n "$vw" ]; then
@@ -795,9 +797,8 @@ apps_list_json() {
       wmode="$(app_field "$id" webMode)"; wmode="${wmode:-proxy}"
       printf ',"web":{"hostPort":"%s","containerPort":"%s","url":"%s","path":"/apps/web/%s/","mode":"%s"' \
         "${web%%:*}" "$wcp" "$(json_escape "$wurl")" "$(json_escape "$id")" "$(json_escape "$wmode")"
-      # webHost opts an app into host mounting: the GUI resolves it by hostname
-      # and serves the app at the ROOT of that name instead of under a path, so
-      # the app needs no base-URL configuration and no URL rewriting.
+      # Retained legacy metadata only. Isolated hosts are derived automatically
+      # from the immutable container identity and instance-wide app domain.
       whost="$(app_field "$id" webHost)"
       [ -n "$whost" ] && printf ',"webHost":"%s"' "$(json_escape "$whost")"
       printf '}'

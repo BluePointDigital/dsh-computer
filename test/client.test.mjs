@@ -6,7 +6,7 @@ import vm from 'node:vm'
 // Execute the actual loader bundle, exposing local functions in this test only.
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   .replace('exports.apply = apply', 'exports.resolveView = resolveView; exports.Viewer = Viewer; exports.apply = apply')
-function load(headers = {}, status = 200, byMethod = null) {
+function load(headers = {}, status = 200, byMethod = null, payload = null, calls = []) {
   let exports
   const context = { URL, AbortController, setTimeout, clearTimeout,
     window: { location: new URL('https://harness.example/'), __ModuleLoader__: { load: ({ factory }) => {
@@ -15,8 +15,9 @@ function load(headers = {}, status = 200, byMethod = null) {
         : { createElement: (type, props, ...children) => ({ type, props, children }) })
     } } },
     fetch: async (_url, init = {}) => {
+      calls.push({ url: _url, init })
       const code = byMethod && init.method && byMethod[init.method] !== undefined ? byMethod[init.method] : status
-      return { ok: code >= 200 && code < 300, status: code, headers: { get: (key) => headers[key] ?? null } }
+      return { ok: code >= 200 && code < 300, status: code, json: async () => payload, headers: { get: (key) => headers[key] ?? null } }
     },
   }
   vm.runInNewContext(source, context)
@@ -65,7 +66,7 @@ test('every load carries a fresh salt so no app can come up from a cached bundle
   assert.equal(vurl.searchParams.get('path'), 'apps/web/desktop/websockify')
   assert.match(vurl.searchParams.get('dsha'), /^[a-z0-9]{1,16}$/)
 })
-test('no published URLs or new-tab action exist; back callback is passed', () => {
+test('legacy view keeps back callback and never opens published container ports', () => {
   assert.ok(!source.includes('window.open'))
   assert.ok(source.includes('h(Viewer, { ...view, onBack })'))
   const tree2 = load(headers).Viewer({ app: desktop, src: '/apps/web/desktop/', mode: 'proxy', onBack: () => {} })
@@ -76,6 +77,23 @@ test('no published URLs or new-tab action exist; back callback is passed', () =>
   const tree = load(headers).Viewer({ app: desktop, src: null, mode: 'blocked', reason: 'test', onBack })
   assert.equal(tree.children[0].children[0].props.onClick, onBack)
   assert.ok(!JSON.stringify(tree).includes('iframe'))
+})
+
+test('isolated launch uses control API, no cross-origin probe and no legacy fallback', async () => {
+  const calls = []
+  const app = { id: 'files', launch: { mode: 'isolated', origin: 'https://files-identity.apps.test' } }
+  const url = app.launch.origin + '/__dsh_apps/launch#ticket'
+  const result = await load({}, 200, null, { ok: true, url }, calls).resolveView(app)
+  assert.equal(result.src, url); assert.equal(result.mode, 'isolated')
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, '/apps/api/launch'); assert.equal(calls[0].init.method, 'POST')
+  const denied = await load({}, 401, null, { ok: false, error: 'denied' }).resolveView(app)
+  assert.equal(denied.src, null); assert.equal(denied.mode, 'blocked')
+  const invalid = await load({}, 200, null, { ok: true, url: 'https://harness.example/apps/web/files/' }).resolveView(app)
+  assert.equal(invalid.mode, 'blocked')
+  const tree = load().Viewer({ app, src: url, mode: 'isolated', onBack() {} })
+  assert.ok(JSON.stringify(tree).includes('/apps/api/open?id=files'))
+  assert.equal(tree.children[1].props.referrerPolicy, 'no-referrer')
+  assert.ok(!tree.children[1].props.sandbox.includes('allow-top-navigation'))
 })
 
 test('a mount that answers HEAD with 404 but GET with 200 still opens', async () => {

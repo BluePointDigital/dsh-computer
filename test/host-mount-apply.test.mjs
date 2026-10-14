@@ -1,147 +1,149 @@
-/**
- * Integration: the host-mounted app effect, through `apply()`. Run:
- *   node --test test/host-mount-apply.test.mjs
- *
- * This file exists because unit tests of `lib/host-router.js` and
- * `lib/host-listen.js` cannot catch a missing import or a mis-wired effect in
- * `lib/index.js` — the module still parses and every unit test still passes. The
- * first version of this feature had exactly that bug (`indexHostApps` used but
- * never imported), found only by running the plugin.
- *
- * It is deliberately NOT in `upgrade-route.test.mjs`: that file's tests share a
- * mutable `delayed` callback queue, and a concurrently-running test there
- * swallows every CLI callback, which makes this effect's catalog read fail for
- * reasons that have nothing to do with host mounting. The shared state is the
- * other file's design; this file keeps its own so a failure here means what it
- * says.
- */
+/** Real apply() wiring, isolated private servers, mocked CLI/Docker only. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import http from 'node:http'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 
-const UPSTREAM_PORT = 8080
-let apps = [{ id: 'files', image: 'fixture-image', web: { webHost: 'files.example.test', containerPort: UPSTREAM_PORT } }]
-
+let apps = [], actualId = 'a'.repeat(64), running = true, inspectTargets = []
 childProcess.execFile = (bin, args, _opts, callback) => {
+  if (bin === 'docker') inspectTargets.push(args.at(-1))
   const out = bin === 'docker'
-    ? JSON.stringify({ NetworkSettings: { Networks: { bridge: { IPAddress: '127.0.0.1' } } } })
+    ? JSON.stringify({ Id: actualId, State: { Running: running }, NetworkSettings: { Networks: { bridge: { IPAddress: '127.0.0.1' } } } })
     : JSON.stringify({ ok: true, apps })
   queueMicrotask(() => callback(null, out, ''))
 }
 syncBuiltinESMExports()
 const { apply } = await import('../lib/index.js')
-
-function context(logs) {
-  const routes = new Map()
-  const disposers = []
+const config = { computerBin: 'fixture-cli', appDomain: 'control.example.org', controlOrigin: 'https://control.example.org', appListenHost: '127.0.0.1', appListenPort: 0 }
+function context() {
+  const routes = new Map(), upgrades = new Map(), disposers = [], logs = []
+  let announce
+  const ready = new Promise(resolve => { announce = resolve })
   const ctx = {
-    logger: { info: (...parts) => logs.push(parts.join(' ')) },
-    connection: { requestRejection: () => undefined },
-    effect(fn) { const dispose = fn(); if (dispose) disposers.push(dispose) },
+    logger: { info(...parts) { const line = parts.join(' '); logs.push(line); const match = /isolated gateway listening on 127\.0\.0\.1:(\d+)/.exec(line); if (match) announce(Number(match[1])) } },
+    connection: { requestRejection: req => req.headers['x-auth'] === 'yes' ? undefined : 401 },
+    effect(fn) { const d = fn(); if (d) disposers.push(d) },
     webServer: {
       register(route) { routes.set(route.path, route); return () => routes.delete(route.path) },
-      registerUpgrade() { return () => {} },
+      registerUpgrade(route) { upgrades.set(route.path, route); return () => upgrades.delete(route.path) },
     },
   }
-  return { ctx, routes, dispose: () => disposers.reverse().forEach((fn) => fn()) }
+  return { ctx, routes, upgrades, ready, logs, async dispose() { while (disposers.length) await disposers.pop()() } }
 }
-
-const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
-
-function request(port, host, path, method = 'GET') {
+const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
+const close = server => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) })
+function request(port, url, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path, method, headers: { host, 'content-length': '0' } }, (res) => {
-      let body = ''
-      res.on('data', (chunk) => { body += chunk })
-      res.on('end', () => resolve({ status: res.statusCode, body }))
-    })
-    req.on('error', reject)
-    req.end()
+    const req = http.request({ hostname: '127.0.0.1', port, path: url, method, headers }, res => {
+      let text = ''; res.on('data', b => { text += b }); res.on('end', () => {
+        let json; try { json = JSON.parse(text) } catch {}
+        resolve({ status: res.statusCode, text, json, headers: res.headers })
+      })
+    }); req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body))
   })
 }
-
-test('apply() starts the host listener and routes by Host with no rewriting', async () => {
-  const upstream = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ url: req.url, host: req.headers.host }))
+async function setup(t, options = config) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gateway-apply-'))
+  const old = process.env.COMPUTER_APPS_STATE
+  process.env.COMPUTER_APPS_STATE = root
+  const instance = context()
+  const front = http.createServer((req, res) => {
+    const route = instance.routes.get(req.url.startsWith('/apps/api') ? '/apps/api' : '/apps/web')
+    if (!route) return res.writeHead(404).end()
+    Promise.resolve(route.handler(req, res)).catch(() => res.destroy())
   })
+  t.after(async () => {
+    await instance.dispose(); await close(front)
+    if (old === undefined) delete process.env.COMPUTER_APPS_STATE; else process.env.COMPUTER_APPS_STATE = old
+    assert.ok(path.resolve(root).startsWith(path.join(os.tmpdir(), 'dsh-gateway-apply-')))
+    await fs.rm(root, { recursive: true, force: true })
+  })
+  await apply(instance.ctx, options)
+  const port = await listen(front)
+  return { ...instance, port }
+}
+const auth = { 'x-auth': 'yes' }
+const launch = { ...auth, origin: config.controlOrigin, 'content-type': 'application/json' }
+
+test('apply owns authenticated isolated gateway and disables BOTH legacy transports', { timeout: 10000 }, async t => {
+  const upstream = http.createServer((req, res) => res.end(JSON.stringify({ url: req.url, host: req.headers.host })))
   const upstreamPort = await listen(upstream)
-  apps = [{ id: 'files', image: 'fixture-image', web: { webHost: 'files.example.test', containerPort: upstreamPort } }]
-
-  const previousPort = process.env.DSH_APPS_HOST_PORT
-  const previousBind = process.env.DSH_APPS_HOST_BIND
-  // Port 0 = let the OS choose. The real default (3099) may be in use, and a
-  // test colliding on a fixed port is what produced a phantom failure earlier.
-  process.env.DSH_APPS_HOST_PORT = '0'
-  process.env.DSH_APPS_HOST_BIND = '127.0.0.1'
-
-  const logs = []
-  const instance = context(logs)
-  try {
-    await apply(instance.ctx, { computerBin: 'fixture-cli' })
-
-    // The listener binds asynchronously; wait for it to announce its port. Entries
-    // carry the `[dsh-applications]` prefix, so search the whole line.
-    let port = 0
-    const deadline = Date.now() + 4000
-    while (Date.now() < deadline && port === 0) {
-      const line = logs.find((entry) => entry.includes('host mount listening on'))
-      const match = line && /host mount listening on 127\.0\.0\.1:(\d+)/.exec(line)
-      if (match) port = Number(match[1])
-      else await new Promise((resolve) => setTimeout(resolve, 25))
-    }
-    assert.ok(port > 0, `listener never announced a port; logs: ${JSON.stringify(logs)}`)
-
-    // A root-absolute path must arrive unchanged. Under the path mount this same
-    // request is the bug being fixed, so this assertion IS the feature.
-    const api = await request(port, 'files.example.test', '/api/login', 'POST')
-    assert.equal(api.status, 200)
-    const echoed = JSON.parse(api.body)
-    assert.equal(echoed.url, '/api/login', 'no mount may be added to the path')
-    assert.equal(echoed.host, '127.0.0.1', 'the public hostname must not be forwarded')
-
-    // The query string must survive too.
-    const query = await request(port, 'files.example.test', '/api/raw?path=/a/b&x=1')
-    assert.equal(JSON.parse(query.body).url, '/api/raw?path=/a/b&x=1')
-
-    // An undeclared name must not reach any app.
-    const stray = await request(port, 'other.example.test', '/api/login', 'POST')
-    assert.equal(stray.status, 404)
-    assert.match(stray.body, /no app is routed/)
-
-    // Disposal must release the port, or a reload would leak a listener.
-    instance.dispose()
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  } finally {
-    instance.dispose()
-    if (previousPort === undefined) delete process.env.DSH_APPS_HOST_PORT
-    else process.env.DSH_APPS_HOST_PORT = previousPort
-    if (previousBind === undefined) delete process.env.DSH_APPS_HOST_BIND
-    else process.env.DSH_APPS_HOST_BIND = previousBind
-    await new Promise((resolve) => upstream.close(resolve))
+  t.after(() => close(upstream))
+  actualId = 'a'.repeat(64); inspectTargets = []
+  apps = [{ id: 'files', containerId: actualId, web: { webHost: 'obsolete.example.test', containerPort: upstreamPort, path: '/apps/web/files/' }, webSockets: ['/ws'] }]
+  const instance = await setup(t)
+  const gatewayPort = await instance.ready
+  const req = (url, options) => request(instance.port, '/apps/api/' + url, options)
+  assert.equal((await req('list')).status, 401)
+  const listed = await req('list', { headers: auth })
+  const descriptor = listed.json.apps[0].launch
+  assert.equal(descriptor.mode, 'isolated')
+  assert.equal(descriptor.host.split('.').slice(1).join('.'), new URL(config.controlOrigin).hostname)
+  assert.equal(instance.upgrades.size, 0, 'no same-origin WS bypass is registered')
+  assert.equal((await request(instance.port, '/apps/web/files/', { headers: auth })).status, 410)
+  assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host } })).status, 401)
+  assert.equal((await request(gatewayPort, '/', { headers: { host: 'obsolete.example.test' } })).status, 404)
+  for (const origin of [undefined, 'null', 'http://control.example.org', 'https://evil.example.org', descriptor.origin]) {
+    const headers = { ...launch }; if (origin === undefined) delete headers.origin; else headers.origin = origin
+    assert.equal((await req('launch', { method: 'POST', headers, body: { id: 'files' } })).status, 403)
   }
+  assert.equal((await req('launch', { method: 'POST', headers: { ...launch, 'x-auth': 'no' }, body: { id: 'files' } })).status, 401)
+  const issued = await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })
+  assert.equal(issued.status, 200)
+  const ticket = new URL(issued.json.url).hash.slice(1)
+  assert.equal((await request(gatewayPort, '/__dsh_apps/launch', { headers: { host: descriptor.host } })).status, 200)
+  const session = await request(gatewayPort, '/__dsh_apps/session', { method: 'POST', headers: { host: descriptor.host, origin: descriptor.origin, 'content-type': 'application/json' }, body: { ticket } })
+  assert.equal(session.status, 200)
+  const cookie = session.headers['set-cookie'][0].split(';')[0]
+  const app = await request(gatewayPort, '/api/root?path=%2Fa', { headers: { host: descriptor.host, cookie } })
+  assert.equal(app.status, 200); assert.equal(app.json.url, '/api/root?path=%2Fa'); assert.equal(app.json.host, descriptor.host)
+  assert.ok(inspectTargets.length > 0 && inspectTargets.every(target => target === actualId), 'only immutable IDs may be inspected')
+  assert.equal((await req('open?id=files', { headers: { ...auth, 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'iframe' } })).status, 403)
+  for (const site of ['cross-site', 'same-site']) {
+    assert.equal((await req('open?id=files', { headers: { ...auth, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': site } })).status, 403)
+  }
+  const top = await req('open?id=files', { headers: { ...auth, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin' } })
+  assert.equal(top.status, 303); assert.equal(new URL(top.headers.location).origin, descriptor.origin)
+  assert.equal(top.headers['cache-control'], 'no-store')
+  // A stale network address must not make a stopped container launchable.
+  running = false
+  assert.equal((await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })).status, 503)
+  assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host, cookie } })).status, 502)
+  running = true
+  // The catalog still describes the original identity; the daemon is authoritative.
+  actualId = 'b'.repeat(64)
+  assert.equal((await request(gatewayPort, '/api/root', { headers: { host: descriptor.host, cookie } })).status, 502)
+  assert.equal((await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })).status, 503)
+  apps = [{ ...apps[0], containerId: actualId }]
+  const replaced = await req('list', { headers: auth })
+  assert.notEqual(replaced.json.apps[0].launch.origin, descriptor.origin)
+  assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host, cookie } })).status, 404)
+  await instance.dispose()
+  const rebound = http.createServer()
+  await new Promise((resolve, reject) => { rebound.once('error', reject); rebound.listen(gatewayPort, '127.0.0.1', resolve) })
+  await close(rebound)
 })
 
-test('an unusable DSH_APPS_HOST_PORT disables the listener instead of crashing the plugin', async () => {
-  const previous = process.env.DSH_APPS_HOST_PORT
-  process.env.DSH_APPS_HOST_PORT = 'not-a-port'
-  const logs = []
-  const instance = context(logs)
-  try {
-    await apply(instance.ctx, { computerBin: 'fixture-cli' })
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    assert.ok(
-      logs.some((entry) => entry.includes('host mount disabled')),
-      `expected a clear refusal; logs: ${JSON.stringify(logs)}`,
-    )
-    // The plugin must still be usable: the path mount is the default and must not
-    // depend on the host listener being up.
-    assert.equal(instance.routes.has('/apps/web'), true)
-  } finally {
-    instance.dispose()
-    if (previous === undefined) delete process.env.DSH_APPS_HOST_PORT
-    else process.env.DSH_APPS_HOST_PORT = previous
-  }
+test('legacy has no unauthenticated hostname listener; invalid opt-in config fails closed', async t => {
+  apps = []
+  const instance = await setup(t, { computerBin: 'fixture-cli' })
+  assert.equal((await request(instance.port, '/apps/api/launch', { method: 'POST', headers: launch, body: { id: 'files' } })).status, 503)
+  assert.ok(!instance.logs.some(line => /gateway listening|host mount listening/.test(line)))
+  const bad = context()
+  await assert.rejects(apply(bad.ctx, { ...config, appListenPort: 'invalid' }), /must be a port/)
+  assert.equal(bad.routes.size, 0)
+})
+
+test('disposal awaits a listener still starting and releases its port', async t => {
+  apps = []
+  const probe = http.createServer(), chosen = await listen(probe); await close(probe)
+  const instance = await setup(t, { ...config, appListenPort: chosen })
+  await instance.dispose()
+  const rebound = http.createServer()
+  await new Promise((resolve, reject) => { rebound.once('error', reject); rebound.listen(chosen, '127.0.0.1', resolve) })
+  await close(rebound)
 })

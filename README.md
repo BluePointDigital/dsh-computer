@@ -75,14 +75,28 @@ Same-origin app JavaScript shares the harness origin: only install trusted code.
 This is an app installer, not a Portainer clone or a general Compose orchestrator.
 See [installation contract](INSTALLATION.md) for limitations and recovery.
 
-## Embedded applications
+## Application hosting
 
-Applications launch **inside DSH**, under `/apps/web/<id>/`, including the noVNC
-desktop. The plugin uses DSH's existing exact-path WebSocket route API; no
-DeepSeek webapp patch or separate hostname per app is needed. Missing mounts or
-capabilities produce an error rather than a tailnet-only fallback/new tab.
+The opt-in **isolated-origin gateway** replaces per-app path rewriting with one
+instance-wide wildcard HTTPS domain: **`*.<exact-harness-hostname>`**, including
+when the harness is already on a subdomain. For `dev.bluepointdigital.com`, use
+`*.dev.bluepointdigital.com`; for `otherdsh.bluepointdigital.com`, use
+`*.otherdsh.bluepointdigital.com`. Hosts are generated automatically from the
+app ID and immutable container identity. Apps own their origin root; HTTP and
+arbitrary WebSocket paths use a neutral transport. Authenticated launch uses a
+single-use ticket and an app-host partitioned cookie, never DSH credentials.
+The viewer also offers a fresh authenticated top-level launch for browser/framing
+limitations. Legacy HTTP and WebSocket routes are disabled while gateway mode is on.
 
-For a web app requiring sockets or literal API URL adaptation:
+This is implemented and tested **source, not a production deployment**. See the
+[operator contract](<INSTALLATION.md#isolated-origin-gateway-opt-in>) for DNS/TLS,
+private ingress peers, mandatory cache bypass, browser limits and configuration.
+See [verification evidence](<GATEWAY-VERIFICATION.md>) for what was actually tested.
+Root hosting removes proxy recipes, not app-owned public-URL/OAuth settings.
+
+Without gateway configuration, the existing **legacy** `/apps/web/<id>/` mounts
+remain available, including noVNC. These share DSH's origin and require trusted
+publishers. In legacy mode only, apps needing sockets or literal URL adaptation use:
 
 ```yaml
 web: 8092:3002
