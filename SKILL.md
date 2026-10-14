@@ -379,6 +379,35 @@ intended to pass.
 **6081–6099**. Two viewers on one port fail quietly: the container starts, the
 port shows as published, and nothing answers.
 
+### Who may install what
+
+Two paths, and they are not interchangeable.
+
+**Inside a box, you have full control.** `computer exec 'apt-get install -y …'`,
+`docker run`, any process, any package — no approval, because it is your machine.
+Blast radius is one container with a bind-mounted home, and `destroy` reverses it.
+Reach for this FIRST when a task needs software; most of the time it is the whole
+answer and no review is involved.
+
+**A program on the machine needs the owner.** A managed app gets a name, a named
+volume, a panel and a slot on the DSH origin that outlives your turn and is visible
+to every session. That is what requires `prepare → approve → run`, and the owner's
+click is the approval — never yours.
+
+The `propose_program` tool is the agent-facing door to that second path. Call it
+when real work hits a missing program (`psql: command not found`), passing the
+failing command as `task` **verbatim** — it is the evidence the owner reads, so a
+summary written by the party seeking approval is the wrong evidence. The tool only
+prepares; it cannot approve and cannot run.
+
+If it returns `ready: false`, it has listed fields it refuses to guess. **Ask the
+owner for them** — do not fill in a port or path to make the proposal complete. An
+invented entry port produces an app that looks broken while the proxy is correct.
+
+`computer apps approve … --trust-publisher` is an operator surface that you also
+have shell access to. Running it to approve your own proposal is a policy
+violation: the review card exists because a human must evaluate the plan.
+
 ### Adding an app
 
 Use **Applications → Add app**. Choose a recipe (HTTP Echo, Nginx, Linux Desktop),

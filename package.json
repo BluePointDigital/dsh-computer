@@ -1,11 +1,11 @@
 {
   "name": "dsh-applications",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "Applications menu for the DeepSeek Harness Web GUI: a sidebar entry plus a main panel that launches and displays the containers in the docker-computer app catalog. Also ships the docker-computer skill in this same package.",
   "type": "module",
   "scripts": {
-    "test": "node --test test/client.test.mjs test/client-hygiene.test.mjs test/recipes.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs test/compression.test.mjs test/app-manager.test.mjs test/installer-api.test.mjs test/installer-client.test.mjs test/installer-recovery.test.mjs test/existing-apps.test.mjs && node test/proxy.test.mjs && bash test/apps-password.test.sh && bash test/apps-catalog-retry.test.sh",
+    "test": "node --test test/client.test.mjs test/client-hygiene.test.mjs test/recipes.test.mjs test/catalog.test.mjs test/upgrade-route.test.mjs test/compression.test.mjs test/app-manager.test.mjs test/installer-api.test.mjs test/installer-client.test.mjs test/installer-recovery.test.mjs test/existing-apps.test.mjs test/plan-derivation.test.mjs test/propose-program.test.mjs && node test/proxy.test.mjs && bash test/apps-password.test.sh && bash test/apps-catalog-retry.test.sh",
     "test:desktop": "RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs",
     "test:installer": "RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs"
   },
