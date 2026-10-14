@@ -24,7 +24,7 @@ test('installer API gates all routes, rejects malformed POST, exposes recipes an
   const request=http.request({host:'127.0.0.1',port,path:'/apps/api/'+route,method,headers:{...(auth?{'x-auth':'yes'}:{}),'content-type':type}},res=>{let data='';res.on('data',b=>data+=b);res.on('end',()=>resolve({status:res.statusCode,data:JSON.parse(data)}))});request.on('error',reject);request.end(method==='GET'||body===undefined?undefined:JSON.stringify(body))
  })
  for(const route of ['recipes','jobs','prepare','approve','recover','retry'])assert.equal((await req(route==='recipes'||route==='jobs'?'GET':'POST',route,{},false)).status,401)
- assert.equal((await req('GET','recipes')).data.recipes.length,3)
+ assert.equal((await req('GET','recipes')).data.recipes.length,8)
  assert.equal((await req('GET','prepare')).status,405)
  assert.equal((await req('POST','prepare',{},true,'text/plain')).status,405)
  const invalid=await req('POST','prepare',{plan:{id:'bad',image:'nginx:1',privileged:true}});assert.equal(invalid.status,500);assert.ok(invalid.data.error.includes('Unsupported'))
