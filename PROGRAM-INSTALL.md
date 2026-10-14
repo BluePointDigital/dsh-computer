@@ -191,6 +191,48 @@ between a visible desktop and a *work* machine.
 5. **Director is live on an older tag.** Any of this landing must account for the
    rollout in [ROLLOUT-v0.2.2-2026-10-12.md](ROLLOUT-v0.2.2-2026-10-12.md).
 
+## Slice B — implemented (v0.4.2, commit `4676b97`)
+
+Built and tested, **not deployed**. `lib/plan-derivation.js` holds the pure
+derivation (a proposal may leave a field blank, never guess one), and
+`buildProposalTool` in `lib/index.js` is the shim: it can `prepare`, and has no
+`approve` or `run` path at all.
+
+Two things were settled by measurement rather than assumption:
+
+- **`tools` is requested with `ctx.inject`, not the static `inject` list.**
+  Cordis 4.0.4 has no optional-inject form, so declaring `tools` hard would
+  unmount the entire plugin — Applications panel included — on any context
+  without a tools runtime. Deferred injection waits, so the failure mode is "the
+  tool is not offered".
+- **`@deepseek-ai/dsh-tools` does resolve from the plugin's real install path**
+  (`/data/profiles/web/node_modules/dsh-applications` → `/opt/dsh/.../dsh-tools`),
+  even though this package declares no `@deepseek-ai` dependency. Verified with
+  `createRequire`, and the registration test observes it resolving. The dynamic
+  import is a net, not the mechanism.
+
+Verified: derivation (11 tests), the tool definition and both branches against
+the **real installed `defineTool`** (8 tests), and the full suite — 75 + 41 + 12
++ 3, 0 failures. **Not** verified: anything live. `apply()` runs at mount, so the
+tool appears only after a `dsh web` restart, and no approve/run was ever
+exercised. A green suite says nothing about the instance.
+
+### The deploy trap this exposed
+
+`/data/skills/docker-computer` is a **symlink into the installed package**
+(`../profiles/web/node_modules/dsh-applications`), and that package is a real
+copy pinned by tag — not this checkout. So `SKILL.md` is shipped *with* the
+plugin and reaches the agent only at the same moment the plugin does. Editing
+`SKILL.md` alone documents a tool that does not exist yet; the two can never be
+deployed separately.
+
+Deploying slice B is therefore the normal release loop, and it needs the
+instance's restart — which happens outside a turn:
+
+1. here: tag `v0.4.2`, push
+2. instance: repoint `package.json` `#v0.4.1` → `#v0.4.2`, `pnpm install --no-frozen-lockfile`
+3. restart `dsh web`, then confirm `propose_program` is in the toolset
+
 ## Next
 
 Slice **B** is the one that makes the concept legible: *ask the agent for something
