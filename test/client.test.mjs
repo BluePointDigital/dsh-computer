@@ -6,15 +6,18 @@ import vm from 'node:vm'
 // Execute the actual loader bundle, exposing local functions in this test only.
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
   .replace('exports.apply = apply', 'exports.resolveView = resolveView; exports.Viewer = Viewer; exports.apply = apply')
-function load(headers = {}, status = 200) {
+function load(headers = {}, status = 200, byMethod = null) {
   let exports
   const context = { URL, AbortController, setTimeout, clearTimeout,
     window: { location: new URL('https://harness.example/'), __ModuleLoader__: { load: ({ factory }) => {
       exports = factory((id) => id === '@deepseek-ai/dsh-client-ui-primitives'
-        ? { Button: 'Button', Tag: 'Tag' }
+        ? { Button: 'Button', Tag: 'Tag', Menu: 'Menu', StateDot: 'StateDot' }
         : { createElement: (type, props, ...children) => ({ type, props, children }) })
     } } },
-    fetch: async () => ({ ok: status === 200, headers: { get: (key) => headers[key] ?? null } }),
+    fetch: async (_url, init = {}) => {
+      const code = byMethod && init.method && byMethod[init.method] !== undefined ? byMethod[init.method] : status
+      return { ok: code >= 200 && code < 300, status: code, headers: { get: (key) => headers[key] ?? null } }
+    },
   }
   vm.runInNewContext(source, context)
   return exports
@@ -73,4 +76,18 @@ test('no published URLs or new-tab action exist; back callback is passed', () =>
   const tree = load(headers).Viewer({ app: desktop, src: null, mode: 'blocked', reason: 'test', onBack })
   assert.equal(tree.children[0].children[0].props.onClick, onBack)
   assert.ok(!JSON.stringify(tree).includes('iframe'))
+})
+
+test('a mount that answers HEAD with 404 but GET with 200 still opens', async () => {
+  // File Browser does exactly this. Treating the HEAD failure as "mount missing"
+  // made a healthy installed app unopenable in the panel.
+  const files = { id: 'files', name: 'File Browser', web: { path: '/apps/web/files/' } }
+  const mountHeaders = { 'x-dsh-app-proxy': 'files', 'x-dsh-app-proxy-features': 'js' }
+  const viaGet = await load(mountHeaders, 200, { HEAD: 404, GET: 200 }).resolveView(files)
+  assert.notEqual(viaGet.mode, 'blocked', 'HEAD-hostile app must still open')
+  assert.ok(viaGet.src.startsWith('/apps/web/files/'), `unexpected mount src ${viaGet.src}`)
+  const dead = await load(mountHeaders, 200, { HEAD: 404, GET: 500 }).resolveView(files)
+  assert.equal(dead.mode, 'blocked', 'a mount that fails both ways is still refused')
+  const unmounted = await load({}, 200, { HEAD: 200, GET: 200 }).resolveView(files)
+  assert.equal(unmounted.mode, 'blocked', 'a 200 without the proxy marker is the shell, not the app')
 })
