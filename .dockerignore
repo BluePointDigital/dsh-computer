@@ -1,0 +1,11 @@
+# Worker build needs source only. Never send workspace profiles/state to Docker.
+.git
+.dsh
+.dsh-computer
+node_modules
+plugin-patch
+*.env
+*.pem
+*.key
+*.p12
+*.pfx

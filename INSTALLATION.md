@@ -75,6 +75,18 @@ registered. Invalid configuration, a failed listener, missing ingress, an expire
 session or an unavailable backend never triggers a shared-origin or raw-port
 fallback. Fix the prerequisite or report failure; do not silently remove isolation.
 
+### Delegated DNS onboarding and automated wildcard TLS
+
+For provider-neutral two-record onboarding without customer DNS API tokens, use
+[the delegated TLS operator contract](DELEGATED-TLS.md). A separate Certbot worker
+updates a restricted acme-dns registration and deploys/renews one custom NPM
+wildcard certificate. The authenticated Applications panel displays DNS records,
+Check DNS and certificate status using a sanitized snapshot volume, never the
+worker's private credential/key volume. Shared validation service and real staging
+acceptance are recorded in [the live evidence](deploy/acme-dns/OLYMPUS-DEPLOYMENT.md);
+production gateway activation remains separate. Complete the ingress requirements
+below independently; a certificate is not proof of gateway/auth/cache readiness.
+
 ### Mandatory one-time ingress setup
 
 1. **Use `*.<exact-harness-hostname>` on every instance.** Set `appDomain` to the

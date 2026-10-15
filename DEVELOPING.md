@@ -152,6 +152,18 @@ self-heals. Installed registries, import metadata, jobs and private env files sh
 that private root; see [INSTALLATION.md](INSTALLATION.md). Gateway sessions are not
 persisted there and expire on process restart.
 
+## Delegated wildcard TLS
+
+[DELEGATED-TLS.md](DELEGATED-TLS.md) describes the separate operator certificate
+worker and customer two-record onboarding. `lib/tls-manager.js` persists private
+registration/pending certificate state; `lib/tls-services.js` implements acme-dns,
+NPM and public TLS adapters. Certbot handles ACME. `bin/tls-cli.mjs` is operator
+provisioning/recovery; `bin/tls-worker.mjs` is supervised independently of DSH.
+The GUI can display/check DNS but cannot submit NPM credentials or issue/reload
+certificates. Source tests do not establish live service/public ACME readiness.
+
+Run `npm run test:tls` for lifecycle, certificate, route auth and UI regressions.
+
 ## Tests (commands, not results)
 
 Install checkout dependencies reproducibly with

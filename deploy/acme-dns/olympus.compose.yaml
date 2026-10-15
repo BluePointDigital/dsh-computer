@@ -1,0 +1,46 @@
+# Deployed through host Portainer, NOT the nested Docker daemon.
+# Config volume is seeded before stack creation. It contains no credentials.
+services:
+  acme-dns:
+    image: joohoi/acme-dns:v2.0.2@sha256:8d327df58b1c9f6361c76734f9761a108fa4f12cf7ca94440a0404a28f75de62
+    container_name: dsh-acme-dns
+    command: ["-c", "/etc/acme-dns/config.cfg"]
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    ports:
+      - "104.225.218.209:53:5353/tcp"
+      - "104.225.218.209:53:5353/udp"
+    volumes:
+      - type: volume
+        source: acme_config
+        target: /etc/acme-dns
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: acme_data
+        target: /var/lib/acme-dns
+        volume: {nocopy: true}
+    networks: [proxy]
+    labels:
+      dsh.acmedns.owner: shared-validation
+      dsh.acmedns.zone: auth.bluepointdigital.com
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+volumes:
+  acme_config:
+    external: true
+    name: dsh-acme-dns-config
+  acme_data:
+    external: true
+    name: dsh-acme-dns-data
+networks:
+  proxy:
+    external: true
+    name: proxy
