@@ -83,7 +83,7 @@ test('apply owns authenticated isolated gateway and disables BOTH legacy transpo
   const descriptor = listed.json.apps[0].launch
   assert.equal(descriptor.mode, 'isolated')
   assert.equal(descriptor.host.split('.').slice(1).join('.'), new URL(config.controlOrigin).hostname)
-  assert.equal(instance.upgrades.size, 0, 'no same-origin WS bypass is registered')
+  assert.deepEqual([...instance.upgrades.keys()], ['/apps/terminal'], 'only authenticated management terminal, no app WS bypass')
   assert.equal((await request(instance.port, '/apps/web/files/', { headers: auth })).status, 410)
   assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host } })).status, 401)
   assert.equal((await request(gatewayPort, '/', { headers: { host: 'obsolete.example.test' } })).status, 404)
@@ -136,6 +136,37 @@ test('legacy has no unauthenticated hostname listener; invalid opt-in config fai
   const bad = context()
   await assert.rejects(apply(bad.ctx, { ...config, appListenPort: 'invalid' }), /must be a port/)
   assert.equal(bad.routes.size, 0)
+})
+
+test('apply launches trusted apps on durable harness ports, persists CLI policy and owns disposal', async t => {
+  const upstream = http.createServer((req, res) => res.end(JSON.stringify({ url: req.url, host: req.headers.host })))
+  const upstreamPort = await listen(upstream)
+  t.after(() => close(upstream))
+  const probe = http.createServer(), chosen = await listen(probe); await close(probe)
+  actualId = 'a'.repeat(64); running = true
+  apps = [{ id: 'files', containerId: actualId, web: { containerPort: upstreamPort, path: '/apps/web/files/' }, webSockets: ['/ws'] }]
+  const options = { computerBin: 'fixture-cli', appAccess: 'ports', controlOrigin: 'http://127.0.0.1:3080', appListenHost: '127.0.0.1', appPortStart: chosen, appPortEnd: chosen }
+  const instance = await setup(t, options)
+  const listed = await request(instance.port, '/apps/api/list', { headers: auth })
+  assert.equal(listed.status, 200)
+  const descriptor = listed.json.apps[0].launch
+  assert.equal(descriptor.mode, 'ports'); assert.equal(descriptor.origin, `http://127.0.0.1:${chosen}`)
+  const saved = JSON.parse(await fs.readFile(path.join(process.env.COMPUTER_APPS_STATE, 'launch-config.json')))
+  assert.equal(saved.appAccess, 'ports'); assert.equal(saved.appPortStart, chosen)
+  assert.deepEqual([...instance.upgrades.keys()], ['/apps/terminal'])
+  assert.equal((await request(instance.port, '/apps/web/files/', { headers: auth })).status, 410)
+  const issued = await request(instance.port, '/apps/api/launch', { method: 'POST', headers: { ...auth, origin: options.controlOrigin, 'content-type': 'application/json' }, body: { id: 'files' } })
+  assert.equal(issued.status, 200); assert.equal(issued.json.url, descriptor.origin + '/')
+  const app = await request(chosen, '/root/asset?x=%2Fa')
+  assert.equal(app.status, 200); assert.equal(app.json.url, '/root/asset?x=%2Fa'); assert.equal(app.json.host, `127.0.0.1:${chosen}`)
+  assert.equal(app.headers['set-cookie'], undefined, 'no gateway session cookie')
+  assert.equal((await request(instance.port, '/apps/api/open?id=files', { headers: auth })).headers.location, descriptor.origin + '/')
+  running = false
+  assert.equal((await request(chosen, '/')).status, 502)
+  running = true
+  await instance.dispose()
+  const rebound = http.createServer()
+  await new Promise((resolve, reject) => { rebound.once('error', reject); rebound.listen(chosen, '127.0.0.1', resolve) }); await close(rebound)
 })
 
 test('disposal awaits a listener still starting and releases its port', async t => {

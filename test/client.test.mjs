@@ -96,6 +96,21 @@ test('isolated launch uses control API, no cross-origin probe and no legacy fall
   assert.ok(!tree.children[1].props.sandbox.includes('allow-top-navigation'))
 })
 
+test('shared-host ports launch directly through the panel without legacy probes or gateway cookies', async () => {
+  for (const origin of ['https://harness.example:20000', 'http://192.0.2.5:20000', 'http://[::1]:20000']) {
+    const calls = [], app = { id: 'files', launch: { mode: 'ports', origin } }
+    const url = origin + '/files/?root=1'
+    const view = await load({}, 200, null, { ok: true, url }, calls).resolveView(app)
+    assert.equal(view.mode, 'ports'); assert.equal(view.src, url)
+    assert.equal(calls.length, 1); assert.equal(calls[0].url, '/apps/api/launch')
+    const tree = load().Viewer({ ...view, onBack() {} })
+    assert.ok(JSON.stringify(tree).includes('/apps/api/open?id=files'))
+    assert.ok(tree.children[1].props.sandbox.includes('allow-same-origin'))
+  }
+  const app = { id: 'files', launch: { mode: 'ports', origin: 'https://harness.example:20000' } }
+  assert.equal((await load({}, 200, null, { ok: true, url: 'https://evil.example/' }).resolveView(app)).mode, 'blocked')
+})
+
 test('a mount that answers HEAD with 404 but GET with 200 still opens', async () => {
   // File Browser does exactly this. Treating the HEAD failure as "mount missing"
   // made a healthy installed app unopenable in the panel.

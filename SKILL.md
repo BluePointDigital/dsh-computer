@@ -410,8 +410,9 @@ answer and no review is involved.
 
 **A program on the machine needs the owner.** A managed app gets a name, a named
 volume, a panel and a launch entry that outlives your turn and is visible to every
-session. That is what requires `prepare → approve → run`, and the owner's
-click is the approval — never yours.
+session. The owner authorizes it: the new runtime manager uses one **Deploy**
+click; the legacy installer uses `prepare → approve → run`. The approval is the
+owner's, never the agent's.
 
 The `propose_program` tool is the agent-facing door to that second path. Call it
 when real work hits a missing program (`psql: command not found`), passing the
@@ -427,9 +428,45 @@ invented entry port produces an app that looks broken while the proxy is correct
 have shell access to. Running it to approve your own proposal is a policy
 violation: the review card exists because a human must evaluate the plan.
 
-### Adding an app
+### Runtime Applications manager
 
-Use **Applications → Add app**. Choose a recipe (HTTP Echo, Nginx, Linux Desktop),
+The new page discovers **all nested Docker containers** automatically and groups
+Compose projects with their services. No registration, migration or adoption is
+needed just to list, inspect, view logs, open a terminal or use supported lifecycle
+controls. Existing containers remain manageable without a saved definition;
+inspection does not reconstruct original Compose source or environment files.
+
+The owner chooses **Deploy application → Template / Container image / Docker
+Compose → Deploy**. One owner submission saves private source/environment and
+queues execution; do not turn it back into separate prepare/approve/run chores.
+An agent can prepare a definition but must not synthesize the owner's click.
+The older proposal/installer APIs below remain compatibility paths.
+
+Details include service/health/status, live SSE logs and download, a genuine xterm
+Docker-exec terminal, inspected configuration, saved configuration revisions,
+redeploy/rollback and lifecycle controls. Private source/environment loads only
+when the owner explicitly requests it. Saving configuration redeploys; rollback
+reapplies a definition, not a data snapshot. Removal retains volumes by default;
+data deletion is a separate explicit option. Interrupted workers retain state and
+become failed for deliberate redeploy after inspection, rather than replaying
+partial Compose changes automatically; durable queued submissions can be scheduled.
+
+Compose v2 is required for all new deployment paths. Provision it persistently
+with `node bin/install-compose.mjs`: checksum-verified pinned v2.40.3 under private
+`$DSH_HOME/tools/docker/cli-plugins/` (provisioned here), not workspace/node_modules.
+Use prebuilt images and self-contained Compose; Git/build deployment is not V1.
+The same plugin serves `/apps/assets/runtime-ui.js`; no replacement GUI/server.
+
+See [APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md) for private storage, supported
+Compose boundaries and recovery. Supplied Chromium fixture acceptance passed
+inventory/details, SSE, xterm typing, private-config no-auto-load and one-click
+submission. Real Compose smoke also passed deployment/redeploy/data-retention/lifecycle/cleanup. Commands:
+`npm run test:runtime-browser` and `npm run test:runtime-live`. These source/fixture
+checks do not install/release/activate the plugin; never restart mid-turn.
+
+### Legacy adding-an-app installer (compatibility)
+
+Use **Applications → Add app** in the older installer flow. Choose a recipe (HTTP Echo, Nginx, Linux Desktop),
 prepare an Advanced single-container plan, or open a dedicated setup conversation.
 The conversation opens with a draft, not an auto-sent request. An agent may research
 and **prepare** a plan; it must not approve/execute it on the user's behalf.
@@ -549,9 +586,29 @@ a plain statement of what will not work.
 
 Unmount by removing the insert and the dependency, then `pnpm install`.
 
+### Shared-host application ports
+
+The user-selected default is the existing harness hostname/IP plus a durable app
+port, e.g. `https://dev.example.com:20000/`. No per-app DNS or cookie rewriting.
+`controlOrigin` / `DSH_APPS_CONTROL_ORIGIN` / `DSH_PUBLIC_URL` supplies the public
+harness origin. When no wildcard domain is configured, it selects ports mode;
+existing wildcard installations switch explicitly with `appAccess: ports`.
+The default range is `20000–20099`, configurable with `appPortStart/appPortEnd`.
+Forward this range once. HTTPS requires direct `appTlsCert/appTlsKey` paths or
+`appTlsTermination: ingress` with TLS ingress on every assigned port. Apps retain
+their own auth/cookies; harness login is not a gate for directly exposed app ports.
+
+Assignments and the server's resolved public CLI launch settings persist in private
+app state. `computer apps list --json` and `computer apps url <id>` share them.
+Stops, upgrades and container replacement preserve each app's port. The transport
+serves root paths and arbitrary WebSockets, without legacy path rewriting or
+app gateway session cookies. See [INSTALLATION.md](INSTALLATION.md#shared-host-application-ports-default).
+New port mode is implemented source until released, ingress-configured and activated;
+never restart the harness mid-turn.
+
 ### Legacy HTTP dashboards — `web:` (gateway disabled)
 
-With `appDomain` unset, **legacy shared-origin mode remains the explicit default**:
+With explicit `appAccess: legacy`, or no known public origin/gateway configuration:
 application views launch through `/apps/web/<id>/` on the DSH origin. This is not
 an isolation boundary for untrusted JavaScript. The server reaches the container's
 private bridge IP; the user's browser only needs to reach DSH. Published CLI URLs
@@ -627,7 +684,7 @@ environment alternatives (plugin values take precedence):
 
 | Field | Environment | Default / requirement |
 |---|---|---|
-| `appDomain` | `DSH_APPS_DOMAIN` | exact harness hostname, without `*.`; unset keeps legacy mode |
+| `appDomain` | `DSH_APPS_DOMAIN` | exact harness hostname, without `*.`; unset selects ports when a public origin is known |
 | `controlOrigin` | `DSH_APPS_CONTROL_ORIGIN` | required exact HTTPS DSH origin, no path/trailing slash |
 | `appIngressPeers` | `DSH_APPS_INGRESS_PEERS` | exact private socket-peer IP array; comma-separated env, default `127.0.0.1,::1` |
 | `appListenHost` | `DSH_APPS_HOST_BIND` | private listener bind, default `127.0.0.1` |

@@ -55,9 +55,35 @@ bin/computer sh            # shell inside
 bin/computer apps          # the catalog the Applications menu renders
 ```
 
-## Add applications (v0.2.0 candidate)
+## Runtime Applications manager
 
-**My apps** is the installed/catalog app screen. **Add app** offers three paths:
+Applications now has a runtime-manager implementation: automatic visibility of
+**all nested Docker containers**, Compose projects grouped with their services,
+and no registration/migration step just to see or manage them. The owner chooses
+**Deploy application → Template / Container image / Docker Compose → Deploy**:
+one click saves the private definition and queues a real deployment.
+
+Details provide live logs, an interactive terminal, configuration, saved revisions,
+rollback and lifecycle controls. Removal retains data by default. Discovered apps
+remain manageable without a saved definition; inspection does not automatically
+reconstruct their deployment source. Git/build deployment is not V1.
+
+Docker Compose v2 is required for deployment. `node bin/install-compose.mjs`
+installs checksum-verified v2.40.3 persistently in private DSH_HOME tool storage;
+it has been provisioned here. The same plugin serves the runtime UI at
+`/apps/assets/runtime-ui.js`.
+
+This is **source work, not a release/install/restart**. Supplied Chromium fixture
+acceptance passed inventory/details, SSE, xterm typing, no automatic private-config
+load and one-click submission; real Compose deployment/redeploy/data-retention/lifecycle smoke also passed. See
+[APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md) for the current user/operator
+contract and acceptance commands.
+
+## Legacy add-app installer (compatibility)
+
+The older installed/catalog **My apps / Add app** flow remains documented below
+for compatibility; it is not the new manager's owner-click deployment sequence.
+**Add app** offers three paths:
 
 1. Supported recipes: HTTP Echo, Nginx and the locally built Linux Desktop.
 2. **Install something else…** opens a new DSH conversation with a draft setup
@@ -77,6 +103,15 @@ See [installation contract](INSTALLATION.md) for limitations and recovery.
 
 ## Application hosting
 
+**Default with a known public harness origin: hostname/IP + assigned app port.**
+For example, `https://dev.example.com:20000/` or `http://192.168.1.50:20000/`.
+Apps open inside Applications, own their URL root, and receive stable ports from
+one configurable range (`20000–20099` by default). No separate app DNS or cookie
+rewriting. Native app authentication/cookies remain unchanged. Set up range
+forwarding/TLS once, not per application; see the
+[shared-host ports contract](INSTALLATION.md#shared-host-application-ports-default).
+Existing wildcard deployments switch explicitly using `appAccess: ports`.
+
 The opt-in **isolated-origin gateway** replaces per-app path rewriting with one
 instance-wide wildcard HTTPS domain: **`*.<exact-harness-hostname>`**, including
 when the harness is already on a subdomain. For `dev.bluepointdigital.com`, use
@@ -94,8 +129,8 @@ private ingress peers, mandatory cache bypass, browser limits and configuration.
 See [verification evidence](<GATEWAY-VERIFICATION.md>) for what was actually tested.
 Root hosting removes proxy recipes, not app-owned public-URL/OAuth settings.
 
-Without gateway configuration, the existing **legacy** `/apps/web/<id>/` mounts
-remain available, including noVNC. These share DSH's origin and require trusted
+With explicit `appAccess: legacy`, or no known public origin/gateway configuration,
+the existing **legacy** `/apps/web/<id>/` mounts remain available, including noVNC. These share DSH's origin and require trusted
 publishers. In legacy mode only, apps needing sockets or literal URL adaptation use:
 
 ```yaml

@@ -79,13 +79,69 @@ Never restart the harness mid-turn. A restart invalidates memory-only gateway
 sessions/tickets; users reopen apps from Applications. Verify the existing GUI
 URL after activation and refresh, not a replacement server.
 
+## Runtime Applications manager
+
+See [APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md) for the new user/operator
+contract: automatic all-container nested-Docker discovery, Compose grouping,
+owner-click template/image/Compose deployment, details/logs/TTY, private saved
+configuration and revisions, redeploy/rollback and retained-data removal.
+Discovery is not adoption and does not reconstruct an original deployment source.
+The older catalog/import/prepare APIs remain compatibility paths, not inventory
+registration requirements.
+
+- [runtime-inventory.js](lib/runtime-inventory.js) reads Docker state and supplies
+  grouped, sanitized inventory/details; endpoint selection remains separate from
+  deployment ownership.
+- [deployments.js](lib/deployments.js) saves private definitions/environment,
+  revision documents and job journals, then runs prebuilt images through Compose
+  v2. Builds/Git contexts are not V1. Interrupted execution is failed for explicit
+  redeploy rather than silently replayed; durable queued owner submissions can run.
+- [runtime-console.js](lib/runtime-console.js) owns SSE logs and interactive Docker
+  exec TTY/WebSocket sessions; a local Unix Docker endpoint is required for TTY.
+- [runtime-ui.js](lib/runtime-ui.js) is loaded through the same plugin at
+  `/apps/assets/runtime-ui.js`, alongside terminal assets. [index.js](lib/index.js)
+  owns the runtime APIs/routes; it is not a second app/server/sidebar registration.
+
+Provision Compose with `node bin/install-compose.mjs`: pinned v2.40.3,
+release-checksum verification, private persistent `$DSH_HOME/tools/docker/cli-plugins/`
+storage, rather than a package-directory or ephemeral-container install. It has
+been provisioned on this instance. The executor selects that Docker config unless
+the operator supplies DOCKER_CONFIG.
+
+```bash
+npm run test:runtime-browser  # Chromium + fixture backend; no installed-GUI claim
+npm run test:runtime-live     # opt-in real Compose smoke creating scratch projects/data
+```
+
+Supplied Chromium fixture acceptance succeeded for inventory/details, SSE logs,
+xterm typing, no automatic private-config loading and one-click deployment
+submission. **Real Compose smoke also passed deployment, retained-data redeploy,
+stop/start and scratch cleanup.** No production
+acceptance are inferred. Server modules still need release installation and a
+coordinated restart; serve the intended UI asset and verify the existing GUI after
+refresh. No release/install/restart was performed as part of these source changes.
+
+## Shared-host ports
+
+The default with a known public origin and no wildcard config is now **harness
+hostname/IP plus a durable assigned app port**. Existing wildcard deployments
+explicitly switch with `appAccess: ports`; do not silently repurpose their TLS worker.
+See [INSTALLATION.md](INSTALLATION.md#shared-host-application-ports-default) for
+range forwarding, TLS and saved CLI configuration. No cookie rewriting or extra app
+DNS is required. `npm test` includes port allocation, HTTP/WS, direct HTTPS, apply
+lifetime and separate-process CLI regressions. `npm run test:ports-browser` uses an
+isolated headless Chromium in the already-running desktop against private scratch
+ports, not the production GUI. Server activation still requires a release and
+coordinated restart; do not deploy a checkout link.
+
 ## Gateway architecture and configuration
 
 [INSTALLATION.md](INSTALLATION.md#isolated-origin-gateway-opt-in) is the operator
 contract, including all six instance-wide settings and environment alternatives:
 `appDomain`, `controlOrigin`, `appIngressPeers`, `appListenHost`, `appListenPort`,
-`appPublicPort`. `appDomain` absent means explicit **legacy shared-origin mode**;
-setting it opts the instance into isolated origins, not a per-app mix-and-match.
+`appPublicPort`. Explicit `appAccess: legacy` retains shared-origin path mounts;
+setting `appDomain` opts existing configurations into isolated origins. With a public
+origin and no wildcard domain, the default is shared-host ports.
 
 - [lib/app-launch.js](lib/app-launch.js): validates policy and emits
   `https://<id>-<identity hash>.<domain>`. Immutable container identity plus install

@@ -52,13 +52,53 @@ plans but must never approve/execute on the human's behalf. Do not put credentia
 or the registry in a synced workspace/package directory. Read
 [INSTALLATION.md](INSTALLATION.md) before altering installation/recovery behavior.
 
+## Runtime Applications manager
+
+Current source replaces catalog-gated visibility with automatic all-container
+nested-Docker inventory and Compose-project grouping. No registration/adoption
+step is needed to list, inspect, log, terminal or manage discovered containers.
+Do not pretend inspection reconstructs a saved source definition. Read
+[APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md).
+
+The owner-facing flow is **Template / Image / Compose → Deploy**, one call, not
+three prepare/approve/run chores. Agents can prepare a draft but cannot synthesize
+an owner click. Saved definitions/environment and revision/job state are private;
+configuration values load only explicitly. Saved apps support redeploy/rollback;
+discovered apps still have lifecycle/log/terminal controls without saved source.
+Data is retained by default, and rollback is not a data snapshot restore.
+
+Compose v2 is required: `node bin/install-compose.mjs` persists checksum-verified
+v2.40.3 under private DSH_HOME tools storage (provisioned here). Builds/Git are not
+V1. The same plugin loads `/apps/assets/runtime-ui.js`; no replacement server.
+Supplied Chromium fixture acceptance passed inventory/details/SSE/xterm typing,
+private-config no-auto-load and one-click submission; real Compose smoke also
+passed deployment/redeploy/data-retention/lifecycle/cleanup (`npm run test:runtime-live`). Browser command:
+`npm run test:runtime-browser`. Source results are not release/install/activation.
+Keep existing shared-host port changes and never restart mid-turn.
+
+## Shared-host app ports — current default with a known public origin
+
+The user chose the conventional trusted-app hostname/IP + assigned-port model.
+Do not require separate app DNS or add cookie rewriting. Read the shared-host ports
+section of [INSTALLATION.md](INSTALLATION.md). `controlOrigin` or `DSH_PUBLIC_URL`
+selects ports when no `appDomain` is set; existing wildcard setups opt into ports
+with `appAccess: ports`. Range defaults to `20000–20099`. App-ID assignments persist
+in private `ports.json` with `ports.lock`; resolved nonsecret server policy is saved
+for the CLI in `launch-config.json`. HTTPS needs direct certificate/key paths or
+explicit `appTlsTermination: ingress` plus matching range ingress. The generator
+[deploy/port-ingress.mjs](deploy/port-ingress.mjs) prints config only. Native app
+cookies/auth remain; this is not the isolated gateway ticket/cookie flow.
+
+This new mode is source work until released/installed, range ingress configured,
+and activated after a coordinated restart. No mid-turn restart.
+
 ## Isolated-origin gateway — opt in once per instance
 
 Read the [configuration and ingress contract](INSTALLATION.md#isolated-origin-gateway-opt-in)
 first. [lib/app-launch.js](lib/app-launch.js) defines instance-wide `appDomain`,
 `controlOrigin`, `appIngressPeers`, `appListenHost`, `appListenPort` and
-`appPublicPort`, with environment alternatives documented there. An unset
-`appDomain` keeps the **explicit legacy default** at `/apps/web/<id>/`; those apps
+`appPublicPort`, with environment alternatives documented there. Explicit
+`appAccess: legacy` retains `/apps/web/<id>/`; those apps
 share DSH's browser origin and must be trusted. DSH has browser authentication:
 control routes use `ctx.connection.requestRejection(req)`, not a Host-only fence.
 

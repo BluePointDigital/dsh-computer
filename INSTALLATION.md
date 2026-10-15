@@ -7,9 +7,106 @@ for scope and the iframe download limitation. Keep publication, dependency
 installation, server restart and installed-GUI verification separate, as described
 in [DEVELOPING.md](<DEVELOPING.md>). No production installation/restart was performed.
 
+## Runtime Applications manager
+
+The new Applications page discovers all containers from this instance's nested
+Docker daemon and groups Compose projects automatically. Listing, inspection,
+logs, terminal and supported lifecycle control need **no registration or
+migration/acceptance step**. Existing catalog/import metadata remains compatible;
+it is no longer the condition for visibility. Discovery does not reconstruct a
+saved deployment definition for an externally created container/project.
+
+The owner deploys a template, container image or pasted/uploaded self-contained
+Compose document with one **Deploy** submission. Saved applications have private
+source/environment, revision history, configuration-driven redeploy and rollback.
+Removal retains data by default; deleting data is explicit. Interrupted workers
+retain containers/data and become failed for deliberate redeploy after inspection;
+durable queued owner submissions may still be scheduled. See the full
+[Applications manager contract](APPLICATIONS-MANAGER.md), including V1 Compose
+restrictions and the difference between configuration rollback and data restore.
+
+Docker Compose v2 is required. `node bin/install-compose.mjs` provisions pinned
+v2.40.3 with SHA-256 verification into `$DSH_HOME/tools/docker/cli-plugins/`, not
+node_modules or the synced workspace. It has been provisioned here; this is not
+activation of the manager. Git deployment/builds are not V1. The UI is served by
+the same plugin at `/apps/assets/runtime-ui.js`.
+
+**Verification scope:** supplied Chromium fixture acceptance passed
+inventory/details/SSE/xterm typing/private-config no-auto-load/one-click submit.
+Real Compose smoke (`npm run test:runtime-live`) passed deployment, retained-data redeploy and lifecycle. The browser command
+is `npm run test:runtime-browser`. No release, dependency installation or harness
+restart for this feature is claimed. Hosting and shared-host port setup below
+remain unchanged; release/activation still follows [DEVELOPING.md](DEVELOPING.md).
+
+## Shared-host application ports (default)
+
+Apps use the harness's existing hostname or IP and an automatically assigned port:
+`https://dev.example.com:20000/` or `http://192.168.1.50:20000/`. No app DNS records,
+subdomains, path adapters or cookie rewriting are required. Applications opens the
+app inside the panel and offers a new-tab link.
+
+Set `controlOrigin` to the existing exact public harness origin (or supply
+`DSH_APPS_CONTROL_ORIGIN` / `DSH_PUBLIC_URL`). With no `appDomain`, this selects
+ports mode. Existing wildcard configurations remain compatible; set
+`appAccess: ports` to switch them explicitly. `appAccess: legacy` retains old path
+mounts. When no public origin is known, old installations retain legacy behavior.
+
+| Plugin setting | Environment alternative | Default |
+|---|---|---|
+| `appAccess` | `DSH_APPS_ACCESS` | `ports` when a public origin is known, `isolated` when `appDomain` is set, otherwise `legacy` |
+| `controlOrigin` | `DSH_APPS_CONTROL_ORIGIN`, then `DSH_PUBLIC_URL` | Exact HTTP(S) harness origin, hostname or IP, including harness port if needed |
+| `appPortStart` / `appPortEnd` | `DSH_APPS_PORT_START` / `DSH_APPS_PORT_END` | `20000` / `20099`, inclusive |
+| `appListenHost` | `DSH_APPS_HOST_BIND` | `0.0.0.0`, or `::` for an IPv6 harness origin; set the private interface when using ingress |
+| `appTlsCert` / `appTlsKey` | `DSH_APPS_TLS_CERT` / `DSH_APPS_TLS_KEY` | Optional certificate/key paths for direct HTTPS listeners |
+| `appTlsTermination` | `DSH_APPS_TLS_TERMINATION` | Set to `ingress` when an external proxy terminates TLS on **every app port** |
+
+Example behind existing TLS ingress:
+
+```yaml
+appAccess: ports
+controlOrigin: https://dev.bluepointdigital.com
+appListenHost: 172.18.0.4
+appPortStart: 20000
+appPortEnd: 20099
+appTlsTermination: ingress
+```
+
+**One-time networking:** publish/forward the configured TCP range into the DSH
+container, or into a TLS ingress which forwards each port to the same private DSH
+port. Generate an nginx HTTP-context server with
+`node deploy/port-ingress.mjs https://dev.example.com 172.18.0.4 /cert/fullchain.pem /cert/privkey.pem`.
+It reuses the existing hostname certificate across the whole range; install it in
+an HTTP-context include, not a single proxy-host Advanced location. Publish
+`20000-20099:20000-20099/tcp` on that ingress container and persist the change in
+its deployment owner. A CDN must support these ports or this route must be direct.
+Do not route app traffic through the harness's credential-injecting control proxy.
+For direct HTTP/IP installations only the range forwarding is needed. HTTPS/IP
+installations need a certificate valid for that IP. HTTPS without direct TLS files
+or explicit ingress termination is rejected instead of advertising broken URLs.
+
+Assignments live in private app state as `ports.json`, separately locked from long
+installation transactions, atomically persisted, and shared by GUI and CLI. The
+server saves its nonsecret resolved public launch policy for CLI invocations which
+do not inherit Cordis settings. Stops, reorderings, package upgrades and container
+replacement preserve each app's port; absent apps' reservations are not silently
+recycled. Exhaustion only makes the new app unavailable. A busy OS port reports
+unavailable and retries the **same** port on refresh, never moving its URL.
+
+This is the conventional **trusted-app, URL-plus-port model**. Apps retain their own
+login and cookies; harness login is not a login wall for directly published app
+ports. Browser origins/storage differ by port; cookies remain shared by hostname.
+No gateway ticket/session cookie is added in this mode. HTTP bodies, root URLs,
+application Authorization, redirects, CSP/X-Frame-Options and arbitrary WebSockets
+pass through without content rewriting. Use the new-tab action for apps that block
+framing. The control APIs retain DSH authentication and exact-Origin checks.
+
+Source implementation and scratch tests do not deploy the port range on an
+existing installation. Install the intended release, configure ingress and activate
+it with a coordinated server restart; never restart mid-turn.
+
 ## Isolated-origin gateway (opt-in)
 
-Without `appDomain`, this instance remains in **explicit legacy mode**:
+With `appAccess: legacy`, or without any public origin or `appDomain`, this instance remains in **explicit legacy mode**:
 `/apps/web/<id>/` shares the DSH browser origin. That is compatibility behavior,
 not isolation; only trusted application JavaScript should run there. DSH has
 browser authentication, and its control routes use
@@ -219,7 +316,11 @@ whose parent it no longer owns and the app dies with `removeChild`. A translator
 works per document, so this opt-out has to be written into the app's own HTML by
 the proxy — an attribute on the embedding iframe would not cover the app.
 
-## Durable listings and existing containers
+## Legacy durable listings and existing-container registration
+
+This section describes the compatibility catalog/registration workflow. The
+[runtime manager](APPLICATIONS-MANAGER.md) discovers containers automatically;
+these registration steps are not prerequisites for its inventory or controls.
 
 The legacy catalog is seeded once into private `catalog.yaml` under the app state
 root using atomic no-clobber creation. Subsequent package upgrades cannot replace
@@ -246,7 +347,10 @@ Docker daemon, not remote host containers. Completed/cancelled/failed installer
 journals are retained under collapsed Installation history.
 
 
-## Surface
+## Legacy installer surface
+
+The following prepare/review surface remains a compatibility API. The new runtime
+page uses the owner-click flow in [APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md).
 
 - My apps: Open, Launch/Stop, Logs, Uninstall for managed apps; legacy catalog
   actions remain compatible. All apps navigation uses the fixed viewer callback.
@@ -328,8 +432,10 @@ Launch restores that same reviewed image content and operation-owned volumes.
 Uninstall unregisters it and clears its secrets; a fresh Install never adopts data.
 Volume names include an install UUID, not just app id. Reusing an app id does not
 adopt a previous install's retained data. Named data volumes are never deleted
-by rollback or uninstall. This first release does not provide data restoration,
-volume deletion, upgrade/recreate or multi-service Compose management. Back up
+by rollback or uninstall. This legacy installer does not provide data restoration,
+volume deletion, upgrade/recreate or multi-service Compose management; the separate
+[runtime manager](APPLICATIONS-MANAGER.md) adds saved-definition redeploy/rollback
+and multi-service Compose deployment. Back up
 important data separately; uninstall is not a disk-cleanup promise.
 
 ## Readiness and boundaries
