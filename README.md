@@ -6,7 +6,7 @@
 
 Portainer-style visibility · CapRover-style deployment simplicity · Built into DSH
 
-[![Release](https://img.shields.io/badge/release-v0.6.2-4561ee?style=flat-square)](https://github.com/BluePointDigital/dsh-computer/tree/v0.6.2)
+[![Release](https://img.shields.io/badge/release-v0.6.3-4561ee?style=flat-square)](https://github.com/BluePointDigital/dsh-computer/tree/v0.6.3)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ed?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![License](https://img.shields.io/badge/license-MIT-555?style=flat-square)](#license)
@@ -65,7 +65,7 @@ From the DSH web profile directory:
 
 ```bash
 cd /data/profiles/web
-pnpm add github:BluePointDigital/dsh-computer#v0.6.2
+pnpm add github:BluePointDigital/dsh-computer#v0.6.3
 
 # Register the plugin and skill; build the desktop image if it is missing.
 bash node_modules/dsh-applications/bin/install.sh install
@@ -176,8 +176,9 @@ npm run test:runtime-live
 npm run test:ports-browser
 ```
 
-**v0.6.2 verification:** 196 automated Node tests and 54 proxy/password/catalog
-checks passed. Chromium exercised the icon grid in dark/light and mobile layouts,
+**v0.6.3 verification:** 197 automated Node tests and 54 proxy/password/catalog
+checks passed, including direct and PATH-based CLI invocation through absolute,
+relative and chained symlinks. Prior Chromium acceptance exercised the icon grid in dark/light and mobile layouts,
 stopped-container filters, direct Start, inspection without starting a container,
 streamed logs, terminal input and deployment submission. The unchanged deployment
 engine also has real Docker Compose acceptance for two-service deployment,

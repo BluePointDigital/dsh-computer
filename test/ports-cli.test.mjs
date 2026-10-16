@@ -35,3 +35,31 @@ esac
   const status = JSON.parse(await run(['status', 'web']))
   assert.equal(status.app.launch.origin, listed[0].launch.origin)
 })
+
+test('computer apps dispatch resolves direct, absolute, relative, chained and PATH symlinks', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cli-symlink-'))
+  t.after(async () => {
+    assert.equal(path.dirname(root), os.tmpdir())
+    assert.ok(path.basename(root).startsWith('dsh-cli-symlink-'))
+    await fs.rm(root, { recursive: true, force: true })
+  })
+  const links = path.join(root, 'links with spaces')
+  await fs.mkdir(links)
+  const cli = new URL('../bin/computer', import.meta.url).pathname
+  const catalog = path.join(root, 'apps.yaml')
+  await fs.writeFile(catalog, 'apps:\n  - id: fixture\n    name: Symlink Fixture\n    image: fixture\n')
+  await fs.writeFile(path.join(root, 'docker'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+  const absolute = path.join(links, 'absolute')
+  const relative = path.join(links, 'relative')
+  const chained = path.join(links, 'computer')
+  await fs.symlink(cli, absolute)
+  await fs.symlink(path.relative(links, cli), relative)
+  await fs.symlink('relative', chained)
+  const env = { ...process.env, PATH: `${links}:${root}:${process.env.PATH}`, COMPUTER_APPS_FILE: catalog, COMPUTER_APPS_STATE: path.join(root, 'private-state'), COMPUTER_BIND_IP: '127.0.0.1', DSH_HOME: root, COMPUTER_APPS_LEGACY: '0' }
+  for (const executable of [cli, absolute, relative, chained, 'computer', './links with spaces/computer']) {
+    const { stdout } = await exec(executable, ['apps', 'list', '--json'], { env, cwd: root })
+    const result = JSON.parse(stdout)
+    assert.equal(result.ok, true, executable)
+    assert.equal(result.apps[0].name, 'Symlink Fixture', executable)
+  }
+})

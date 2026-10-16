@@ -5,7 +5,17 @@
 # Run `computer help` for the command surface.
 set -euo pipefail
 
-BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Follow PATH symlinks (including relative targets and chains) before locating
+# sibling modules. Plain readlink works here without GNU-only readlink -f.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    *) SELF="$(dirname "$SELF")/$TARGET" ;;
+  esac
+done
+BIN_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 SKILL_DIR="$(cd "$BIN_DIR/.." && pwd)"
 
 # This skill is installed system-wide (/data/skills/docker-computer), so its own
