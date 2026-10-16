@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import fs from 'node:fs/promises'
-import { createRuntimeUI, filterRuntimeApps, runtimeCategory, runtimeNeedsAttention, runtimeStatusLabel } from '../lib/runtime-ui.js'
+import { createRuntimeUI, filterRuntimeApps, runtimeCategory, runtimeNeedsAttention, runtimeStatusLabel, runtimeControls } from '../lib/runtime-ui.js'
 
 test('runtime Applications renders a deployment manager, not adoption/registration gates', () => {
   const UI = createRuntimeUI({ React, api: async () => ({ ok: true, apps: [], deployments: [] }), resolveView: async () => ({}), Viewer: () => null })
@@ -36,6 +36,20 @@ test('status counts and views include stopped infrastructure and unhealthy apps 
   assert.equal(runtimeStatusLabel(apps[1]), 'Stopped', 'old healthy healthcheck does not hide stopped state')
   assert.equal(runtimeNeedsAttention(apps[1]), false, 'on-demand stopped is not an error')
   assert.equal(runtimeStatusLabel(apps[5]), 'Unhealthy')
+})
+
+test('menu lifecycle availability follows actual service states and saved deployment ownership', () => {
+  const app = state => ({ state, services: [{ state }] })
+  assert.deepEqual(runtimeControls(app('exited')), { start: true, stop: false, restart: true, remove: true, redeploy: false })
+  assert.deepEqual(runtimeControls(app('running')), { start: false, stop: true, restart: true, remove: true, redeploy: false })
+  assert.equal(runtimeControls(app('paused')).start, false)
+  assert.equal(runtimeControls(app('paused')).stop, true)
+  assert.equal(runtimeControls(app('paused')).restart, false)
+  assert.equal(runtimeControls({ state: 'queued', services: [{ state: 'running' }] }, true).remove, false)
+  assert.equal(runtimeControls({ state: 'missing', services: [] }).remove, false)
+  assert.equal(runtimeControls({ state: 'removed', services: [] }, true).start, true)
+  assert.equal(runtimeControls(app('exited'), true).redeploy, true)
+  assert.equal(runtimeControls({ state: 'partial', services: [{ state: 'running' }, { state: 'exited' }] }).stop, true)
 })
 
 test('management UI provides real streamed logs, xterm transport, owner-click deploy and config privacy', async () => {

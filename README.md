@@ -6,7 +6,7 @@
 
 Portainer-style visibility · CapRover-style deployment simplicity · Built into DSH
 
-[![Release](https://img.shields.io/badge/release-v0.6.1-4561ee?style=flat-square)](https://github.com/BluePointDigital/dsh-computer/tree/v0.6.1)
+[![Release](https://img.shields.io/badge/release-v0.6.2-4561ee?style=flat-square)](https://github.com/BluePointDigital/dsh-computer/tree/v0.6.2)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ed?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![License](https://img.shields.io/badge/license-MIT-555?style=flat-square)](#license)
@@ -32,7 +32,7 @@ manage what's already running.
 | **Icon launcher** | A responsive app grid with coloured icons, direct Start/Open actions and one-click All, Running, Stopped, Needs attention and Infrastructure views. |
 | **Automatic discovery** | See containers in every state, with Compose services grouped into applications. Search and status counts include infrastructure instead of silently hiding it. |
 | **Simple deployment** | Choose a template, enter an image or paste/upload Compose. Fill in settings and click **Deploy**. |
-| **Application controls** | Start, stop, restart, remove, redeploy and roll back saved deployment revisions. |
+| **Application controls** | Each icon’s **⋯** menu offers Start, Stop, Restart, Remove and Details/Logs/Terminal shortcuts. Saved deployments also offer Redeploy and revision rollback from their history. |
 | **Live visibility** | Service health, CPU and memory usage, streaming logs, log search and downloads. |
 | **Interactive terminals** | Open a real shell inside a service, directly from its details page. |
 | **Editable configuration** | Load a saved definition, change environment or deployment settings, then save and redeploy. |
@@ -65,7 +65,7 @@ From the DSH web profile directory:
 
 ```bash
 cd /data/profiles/web
-pnpm add github:BluePointDigital/dsh-computer#v0.6.1
+pnpm add github:BluePointDigital/dsh-computer#v0.6.2
 
 # Register the plugin and skill; build the desktop image if it is missing.
 bash node_modules/dsh-applications/bin/install.sh install
@@ -176,7 +176,7 @@ npm run test:runtime-live
 npm run test:ports-browser
 ```
 
-**v0.6.1 verification:** 195 automated Node tests and 54 proxy/password/catalog
+**v0.6.2 verification:** 196 automated Node tests and 54 proxy/password/catalog
 checks passed. Chromium exercised the icon grid in dark/light and mobile layouts,
 stopped-container filters, direct Start, inspection without starting a container,
 streamed logs, terminal input and deployment submission. The unchanged deployment
