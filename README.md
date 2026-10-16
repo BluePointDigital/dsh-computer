@@ -1,192 +1,194 @@
-# dsh-computer
+<div align="center">
 
-A stateful Linux computer for the [DeepSeek Harness](https://github.com/deepseek-ai) — a real Debian
-box in a Docker container with a virtual display, Chromium, root-capable package installs, and a
-persistent home directory.
+# Applications for DeepSeek Harness
 
-This repository ships **two halves of one capability as a single package**:
+**Deploy apps. Manage containers. Give your agent a real computer.**
 
-| Half | What it is | How it lands |
-|---|---|---|
-| **The plugin** (`package.json`, `lib/`, `cordis.patch.yml`) | A DSH client+server plugin that puts an **Applications** menu in the Web GUI | `dsh.bundle.patch` — the profile lists the package as a bundle, and it appears in the Plugins panel with a toggle |
-| **The skill** (`SKILL.md`, `bin/`, `image/`) | The agent-facing procedure that makes the capability *usable* | Discovered from a skill root as a loose `SKILL.md` |
+Portainer-style visibility · CapRover-style deployment simplicity · Built into DSH
 
-The point of the single-package layout is that **one dependency delivers both**. A package installed
-under a profile's `node_modules/` is simultaneously a bundle (for the plugin) and a valid skill root
-(for the skill), so there is no separate copy step and no hand-appended config to drift out of sync.
+[![Release](https://img.shields.io/badge/release-v0.6.0-4561ee?style=flat-square)](https://github.com/BluePointDigital/dsh-computer/tree/v0.6.0)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ed?style=flat-square&logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![License](https://img.shields.io/badge/license-MIT-555?style=flat-square)](#license)
+
+[Features](#what-you-get) · [Install](#install) · [Deploy an app](#deploy-an-app) · [Desktop & CLI](#a-real-computer-for-your-agent) · [Documentation](#documentation)
+
+</div>
+
+---
+
+**dsh-computer** brings an Applications page and a persistent Linux desktop to the
+DeepSeek Harness. One package—`dsh-applications`—ships both the web plugin and the
+agent's `docker-computer` skill.
+
+Existing containers appear automatically. New applications deploy from a template,
+a Docker image or a Compose document. No registration or adoption step to see and
+manage what's already running.
+
+## What you get
+
+| | Capability |
+|---|---|
+| **Automatic discovery** | See containers in every state, with Compose services grouped into applications. Search and filter infrastructure when you need it. |
+| **Simple deployment** | Choose a template, enter an image or paste/upload Compose. Fill in settings and click **Deploy**. |
+| **Application controls** | Start, stop, restart, remove, redeploy and roll back saved deployment revisions. |
+| **Live visibility** | Service health, CPU and memory usage, streaming logs, log search and downloads. |
+| **Interactive terminals** | Open a real shell inside a service, directly from its details page. |
+| **Editable configuration** | Load a saved definition, change environment or deployment settings, then save and redeploy. |
+| **Embedded applications** | Open web apps and the desktop inside the harness, or in a new tab. |
+| **Persistent storage** | Keep application data by default when removing an app. Save deployment definitions and credentials outside the source tree. |
+
+### The everyday workflow
+
+```text
+                ┌─ Template ────────┐
+Deploy app ─────┼─ Container image ─┼──→ Deploy ──→ Watch progress ──→ Open
+                └─ Docker Compose ─┘                                 │
+                                                                     ↓
+                                           Logs · Terminal · Configuration
+```
 
 ## Install
 
+### Requirements
+
+- **DeepSeek Harness:** `>=0.2.0-rc.2 <0.2.1-0`
+- **Node.js:** 20 or newer, plus `pnpm`
+- **Docker:** an accessible daemon; nested Docker is supported
+- **Compose v2:** required for application deployment
+- **Desktop:** build the included image when you want the Linux computer
+
+### Install the pinned release
+
+From the DSH web profile directory:
+
 ```bash
-# 1. Declare the dependency (pins a version)
 cd /data/profiles/web
-pnpm add github:BluePointDigital/dsh-computer#v0.1.4
+pnpm add github:BluePointDigital/dsh-computer#v0.6.0
 
-# 2. Wire the rest: register the bundle, link the skill into the skill root,
-#    build the box image if absent, then verify the whole stack.
-bin/install.sh
+# Register the plugin and skill; build the desktop image if it is missing.
+bash node_modules/dsh-applications/bin/install.sh install
+
+# Provision the checksum-verified Compose plugin in private persistent storage.
+node node_modules/dsh-applications/bin/install-compose.mjs
 ```
 
-`bin/install.sh` is idempotent and safe to re-run.
+Restart DSH **between turns**, then refresh the browser and open **Applications**.
+For a custom profile or home directory, pass `--profile NAME` and
+`--dsh-home DIR` to the installer.
 
-A restart is required after step 2: `dsh.profile.bundles` is the composition root, and
-`patchReload: live` is **inert** on 0.2.0-rc.2 (see SKILL.md): every patch-layer change
-needs a `dsh web` restart, and the bundle list needs one for a *different* reason --
-bundles are resolved outside the Cordis module roots.
+The plugin should be registered **once**, through the profile's bundle list. The
+installer handles the wiring; a dependency alone does not register the agent skill.
+See the [installation guide](<INSTALLATION.md>) for configuration and the
+[development guide](<DEVELOPING.md>) for release and activation procedures.
 
-`SKILL.md` is what makes the agent aware the capability exists — and `bin/install.sh verify` is what
-stops it from *believing* it has a computer when dockerd is missing.
+## Deploy an app
 
-## Requirements
+Open **Applications → Deploy application**, then choose your source:
 
-- A reachable Docker daemon (nested dockerd is fine)
-- `node` >= 20, `pnpm`
-- For embedded desktop/apps: a browser that can reach the DSH GUI. No tailnet
-  membership or per-app public hostname is required.
+| Source | Supply |
+|---|---|
+| **Template** | Pick an app and fill in its required settings. |
+| **Container image** | An image tag or digest, optional web port, environment values and persistent data paths. |
+| **Docker Compose** | A self-contained Compose document, interpolation values and a frontend service/port if it has a web interface. |
 
-## Usage
+Click **Deploy**. The manager saves the definition privately and shows validation,
+image download, startup and readiness progress. Failed deployments remain visible
+with diagnostics.
+
+### Manage it in place
+
+Each application has five detail tabs:
+
+**Overview** · **Logs** · **Terminal** · **Configuration** · **Deployments**
+
+Saved deployments support configuration edits, redeployment and revision rollback.
+Discovered containers get lifecycle controls, inspection, logs and terminal access
+without importing a definition. Discovery does not reconstruct their original
+Compose source.
+
+> **Your data stays by default.** Removing an app keeps persistent volumes unless
+> you explicitly choose to delete them. Rolling back a deployment restores its
+> definition—not a database snapshot.
+
+### Web app access
+
+Use the harness's existing hostname or IP with a stable assigned application port:
+
+```text
+Harness     https://harness.example.com
+App one     https://harness.example.com:20000/
+App two     https://harness.example.com:20001/
+```
+
+Configure the TCP range and TLS once; the default range is **20000–20099**. Apps
+own their URL root, with HTTP and WebSocket support—no per-app DNS or cookie
+rewriting. Set `appAccess: ports` and the public harness origin to select this
+layout explicitly.
+
+Apps use their own authentication. Ports separate browser origins, but cookies
+remain shared by hostname. An app that blocks embedding can open in a new tab.
+See [hosting configuration](<INSTALLATION.md#shared-host-application-ports-default>)
+for HTTP/IP, direct HTTPS and ingress setups.
+
+## A real computer for your agent
+
+The included skill provides a stateful Debian container with Chromium, a virtual
+display and a persistent home directory. The agent can install software, run
+commands, drive the browser and share a desktop view with you.
 
 ```bash
-bin/computer up            # create/start the box (idempotent)
-bin/computer up --desktop  # ...and serve the display at http://<host>:<port>/vnc.html
-bin/computer status        # container, display, ports, home size
-bin/computer exec 'uname -a'
-bin/computer sh            # shell inside
-bin/computer apps          # the catalog the Applications menu renders
+C=/data/skills/docker-computer/bin/computer
+
+$C up                     # Create or start the workspace computer
+$C up --desktop           # Start its shared desktop viewer
+$C exec 'uname -a'         # Run a command inside
+$C sh                     # Open a shell
+$C status                 # Inspect the computer
+$C down                   # Stop it without removing its state
 ```
 
-## Runtime Applications manager
+The home directory survives container replacement. Software installed in the
+container layer survives stop/start, but not replacement. The desktop image is
+built from the included [Dockerfile](<image/Dockerfile>).
 
-Applications now has a runtime-manager implementation: automatic visibility of
-**all nested Docker containers**, Compose projects grouped with their services,
-and no registration/migration step just to see or manage them. The owner chooses
-**Deploy application → Template / Container image / Docker Compose → Deploy**:
-one click saves the private definition and queues a real deployment.
+## Scope
 
-Details provide live logs, an interactive terminal, configuration, saved revisions,
-rollback and lifecycle controls. Removal retains data by default. Discovered apps
-remain manageable without a saved definition; inspection does not automatically
-reconstruct their deployment source. Git/build deployment is not V1.
+This is a **single-engine application manager**, not a Kubernetes or multi-host
+orchestrator. Deployment currently uses prebuilt images; Git builds and Dockerfile
+build pipelines are not included.
 
-Docker Compose v2 is required for deployment. `node bin/install-compose.mjs`
-installs checksum-verified v2.40.3 persistently in private DSH_HOME tool storage;
-it has been provisioned here. The same plugin serves the runtime UI at
-`/apps/assets/runtime-ui.js`.
+Compose deployments support multi-service applications, named volumes, networks,
+health checks and dependencies. They use self-contained definitions rather than
+arbitrary host files, external resources or privileged Docker passthrough. See the
+[manager guide](<APPLICATIONS-MANAGER.md>) for supported fields and recovery behavior.
 
-This is **source work, not a release/install/restart**. Supplied Chromium fixture
-acceptance passed inventory/details, SSE, xterm typing, no automatic private-config
-load and one-click submission; real Compose deployment/redeploy/data-retention/lifecycle smoke also passed. See
-[APPLICATIONS-MANAGER.md](APPLICATIONS-MANAGER.md) for the current user/operator
-contract and acceptance commands.
+## Development & verification
 
-## Legacy add-app installer (compatibility)
+```bash
+npm ci --legacy-peer-deps
+npm test
 
-The older installed/catalog **My apps / Add app** flow remains documented below
-for compatibility; it is not the new manager's owner-click deployment sequence.
-**Add app** offers three paths:
-
-1. Supported recipes: HTTP Echo, Nginx and the locally built Linux Desktop.
-2. **Install something else…** opens a new DSH conversation with a draft setup
-   request in the chosen workspace. The agent researches/prepares; you approve.
-3. **Advanced** prepares a single-container image/entry/resources/data/env plan.
-
-Every path uses one shared installer with a durable private registry, immutable
-image review, explicit publisher-trust approval, progress, logs and owned rollback.
-The agent never needs to edit node_modules or add a raw docker run command.
-New apps publish no host ports. Uninstall keeps data volumes/images; reinstall
-uses fresh volumes rather than silently adopting a previous install's data.
-
-Preparation can download an image for review but creates/starts no container.
-Same-origin app JavaScript shares the harness origin: only install trusted code.
-This is an app installer, not a Portainer clone or a general Compose orchestrator.
-See [installation contract](INSTALLATION.md) for limitations and recovery.
-
-## Application hosting
-
-**Default with a known public harness origin: hostname/IP + assigned app port.**
-For example, `https://dev.example.com:20000/` or `http://192.168.1.50:20000/`.
-Apps open inside Applications, own their URL root, and receive stable ports from
-one configurable range (`20000–20099` by default). No separate app DNS or cookie
-rewriting. Native app authentication/cookies remain unchanged. Set up range
-forwarding/TLS once, not per application; see the
-[shared-host ports contract](INSTALLATION.md#shared-host-application-ports-default).
-Existing wildcard deployments switch explicitly using `appAccess: ports`.
-
-The opt-in **isolated-origin gateway** replaces per-app path rewriting with one
-instance-wide wildcard HTTPS domain: **`*.<exact-harness-hostname>`**, including
-when the harness is already on a subdomain. For `dev.bluepointdigital.com`, use
-`*.dev.bluepointdigital.com`; for `otherdsh.bluepointdigital.com`, use
-`*.otherdsh.bluepointdigital.com`. Hosts are generated automatically from the
-app ID and immutable container identity. Apps own their origin root; HTTP and
-arbitrary WebSocket paths use a neutral transport. Authenticated launch uses a
-single-use ticket and an app-host partitioned cookie, never DSH credentials.
-The viewer also offers a fresh authenticated top-level launch for browser/framing
-limitations. Legacy HTTP and WebSocket routes are disabled while gateway mode is on.
-
-This is implemented and tested **source, not a production deployment**. See the
-[operator contract](<INSTALLATION.md#isolated-origin-gateway-opt-in>) for DNS/TLS,
-private ingress peers, mandatory cache bypass, browser limits and configuration.
-See [verification evidence](<GATEWAY-VERIFICATION.md>) for what was actually tested.
-Root hosting removes proxy recipes, not app-owned public-URL/OAuth settings.
-
-With explicit `appAccess: legacy`, or no known public origin/gateway configuration,
-the existing **legacy** `/apps/web/<id>/` mounts remain available, including noVNC. These share DSH's origin and require trusted
-publishers. In legacy mode only, apps needing sockets or literal URL adaptation use:
-
-```yaml
-web: 8092:3002
-webSockets: /socket
-webRewrite: /api/
+# Optional acceptance checks; require the documented local Docker/browser setup.
+npm run test:runtime-browser
+npm run test:runtime-live
+npm run test:ports-browser
 ```
 
-Both fields are optional, space-separated lists. Socket paths are exact; rewrite
-prefixes end in `/`. Prefer native application base-path support where available.
-Legacy viewer-only catalogs remain supported; legacy direct-mode entries need to
-switch to proxy. See [release notes](RELEASE-v0.1.9.md) for verification,
-compatibility boundaries and the production release loop. This repository is the
-source, not the running tag-pinned installation.
+**v0.6.0 verification:** 194 automated Node tests and 56 proxy/password/catalog
+checks passed. Chromium exercised discovery, details, streamed logs, terminal input
+and deployment submission. Real Docker Compose acceptance covered a two-service
+deployment, redeployment, data retention and lifecycle operations.
 
-## Layout
+## Documentation
 
-```
-package.json        the plugin manifest (name: dsh-applications) + dsh.bundle.patch
-cordis.patch.yml    the bundle's mount row — the plugin's own declaration
-lib/                plugin code: index.js (server), client.js (GUI), proxy.js
-SKILL.md            the skill the agent reads
-bin/computer        the CLI: up / exec / sh / status / apps / build
-apps.yaml           the app catalog the menu renders (an allowlist, fail-closed)
-bin/install.sh      idempotent wiring + verification
-bin/switch-to-bundle.sh   migrate a profile from a hand-appended insert to a bundle
-bin/test-switch.sh  round-trip test for the above, against a copy of the profile
-image/              Dockerfile + box provisioning scripts
-test/               plugin test suite
-```
-
-## Notes on the bundle form
-
-A profile can mount this plugin two ways, and **exactly one must be present** — both at once
-instantiates it twice:
-
-- **bundle form (preferred)** — the package is listed in `dsh.profile.bundles`; its own
-  `cordis.patch.yml` supplies the mount row. The Plugins panel lists it and gives it a toggle.
-- **insert form (legacy)** — a hand-appended `- insert:` in the profile's `cordis.patch.yml`.
-  Applies live, but the panel cannot see it and it has no toggle.
-
-`bin/switch-to-bundle.sh` migrates between them. It does both edits atomically, backs up first, and
-refuses to leave the plugin mounted twice.
-
-## Status / caveats
-
-- **Verified:** the plugin mounts via the bundle form and appears in the Plugins panel; the box
-  starts, serves its display, and runs commands; `bin/install.sh verify` passes.
-- **How the skill reaches the agent:** skills are found by scanning skill *roots*, and a profile's
-  `node_modules/` is not one — so a dependency install alone does not surface `SKILL.md`. The list of
-  roots *is* configurable (`customSkillDirs`), and discovery accepts a loose `SKILL.md` at a root, so
-  pointing it at this package would work — but that setting lives in the **agent preset** config
-  (`preset-cordis`), not the profile, so it is not a profile-level toggle. `bin/install.sh` therefore
-  links the package into the user skill root (`<dshHome>/skills/<skill-name>`), which every agent on
-  the host sees. `watchFollowSymlinks` defaults to true, so the link is watched like a real directory.
-- The image is **not** in this repository; build it from `image/Dockerfile`.
+| Guide | Contents |
+|---|---|
+| [Applications manager](<APPLICATIONS-MANAGER.md>) | Deployment, discovery, controls, private configuration and recovery |
+| [Installation](<INSTALLATION.md>) | Plugin setup, application routing, ports and TLS |
+| [Development](<DEVELOPING.md>) | Local development, testing, releases and activation |
+| [Agent skill](<SKILL.md>) | Computer, desktop and CLI procedures |
+| [Port verification](<PORTS-VERIFICATION.md>) | Shared-host transport and browser acceptance evidence |
 
 ## License
 
