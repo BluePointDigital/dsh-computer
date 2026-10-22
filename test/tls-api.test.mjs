@@ -36,6 +36,9 @@ test('TLS control APIs require DSH auth and exact Origin; never expose secrets o
     await routes.get('/apps/api').handler({ method, url: '/apps/api/' + name, headers }, res)
     return { status: res.status, text: res.text, body: JSON.parse(res.text) }
   }
+  for (const name of ['access-health', 'access-check']) assert.equal((await request('GET', name)).status, 401)
+  assert.equal((await request('POST', 'access-health', { 'x-auth': 'yes' })).status, 405)
+  for (const origin of [undefined, 'https://evil.example']) assert.equal((await request('POST', 'access-check', { 'x-auth': 'yes', origin, 'content-type': 'application/json' })).status, 403)
   assert.equal((await request('GET', 'tls-status')).status, 401)
   const status = await request('GET', 'tls-status', { 'x-auth': 'yes' })
   assert.equal(status.status, 200); assert.equal(status.body.tls.records.length, 2)
