@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AccessHealth } from '../lib/access-health.js'
 import { createAccessHealthBanner } from '../lib/runtime-ui.js'
 const domain = 'control.customer.example'
-const gateway = { mode: 'isolated', domain }
+const gateway = { domain } // Real gatewayConfig isolated shape omits mode.
 const snapshot = { configured: true, domain, phase: 'ready', records: [{type:'A',name:`*.${domain}`,value:'192.0.2.10',proxy:'DNS only'},{type:'CNAME',name:`_acme-challenge.${domain}`,value:'unique.auth.example',proxy:'DNS only'}], certificate:{expires:Date.now()+86400000} }
 const error = code => { throw Object.assign(Error('private resolver message'), {code}) }
 const resolver = {resolve4:async()=>['192.0.2.10'],resolve6:async()=>error('ENODATA'),resolveCname:async()=>['unique.auth.example.']}

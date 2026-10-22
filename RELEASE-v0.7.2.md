@@ -1,4 +1,8 @@
-# v0.7.2 — Applications access setup diagnostics
+# v0.7.2 / v0.7.3 — Applications access setup diagnostics
+
+**Use v0.7.3:** installation inspection caught that the historical isolated-policy
+object omits a mode property. v0.7.3 infers isolated policy from its domain and
+has a regression test using that real shape. v0.7.2 is superseded; tags are immutable.
 
 Adds a warning at the top of Applications when DNS, certificate provisioning,
 private listener availability or access-mode configuration needs attention.
