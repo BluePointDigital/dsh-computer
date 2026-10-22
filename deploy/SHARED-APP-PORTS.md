@@ -20,9 +20,25 @@ Olympus target:
 - Apps share cookies by hostname despite distinct origins by port; this is the
   trusted-app model, not the isolated ticket/session gateway.
 
-Before cutover the TLS range returns 502 because the harness has not switched its
-listeners. Do not call this live app acceptance. Existing wildcard remains until
-new mode is verified; retire its route only after acceptance. Restart after turn end.
+## Live verification — 2026-10-22 02:23 UTC
+
+Olympus is running 0.7.1 with the saved shared app origin. All five web/viewer
+launch descriptors use ports; none uses isolated subdomains. Public trusted HTTPS
+File Browser :20001 and nested Portainer :20004 return 200. Control root still
+returns 401 anonymously. All six original container IDs remain; the same two apps
+that were running before activation were restored. Temporary cutover bundle removed.
+
+The old private isolated listener on :3099 is no longer running; obsolete wildcard
+addresses return 502 and cannot reach applications. NPM route 23 and certificate 33
+are deliberately retained as certificate-renewal ownership records: the existing
+TLS worker audits that exact route before renewing the certificate also serving
+the new ports. Deleting/disabling it without migrating renewal would strand HTTPS
+at expiry. This dormant route is not used by Applications. A future cleanup must
+separate certificate renewal from wildcard route ownership before deleting it.
+
+Source and deterministic transport tests cover WebSockets; a live authenticated
+browser/WS session was not exercised during this cutover. No desktop was started
+just for verification.
 
 Configuration changes should use Harness ConfigEditor through its owner lifecycle,
 not edit the live profile as a shortcut. Back up pin/config/state before activation.
