@@ -37,8 +37,8 @@ separate from publication/installation; never restart an active turn.
 ## Verification
 
 Focused diagnostics, authentication-route and runtime-UI tests: 21 passed before
-release. Existing full suite: 254 Node tests plus 39 proxy, 12 password and 3 catalog
-checks passed. Nine new diagnostics tests passed separately (and are now in npm test).
+release. Final v0.7.3 full suite: 263 Node tests plus 39 proxy, 12 password and 3 catalog
+checks passed, including all nine new diagnostics tests.
 The optional real whoami upstream check skipped because that app is stopped.
 Installed-browser results are recorded separately after execution. Tests cover no DNS vs timeout, incorrect IP/AAAA, CNAME, missing/mismatched
 snapshot, port-mode warning, cache/coalescing, safe HTML rendering and authenticated
