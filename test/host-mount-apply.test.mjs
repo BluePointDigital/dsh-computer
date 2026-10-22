@@ -1,22 +1,12 @@
-/** Real apply() wiring, isolated private servers, mocked CLI/Docker only. */
+/** Real apply() wiring with a private Unix Engine daemon and loopback app servers. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import http from 'node:http'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
-import childProcess from 'node:child_process'
-import { syncBuiltinESMExports } from 'node:module'
+import { dockerFixture, containerInfo } from './helpers/docker-fixture.mjs'
 
-let apps = [], actualId = 'a'.repeat(64), running = true, inspectTargets = []
-childProcess.execFile = (bin, args, _opts, callback) => {
-  if (bin === 'docker') inspectTargets.push(args.at(-1))
-  const out = bin === 'docker'
-    ? JSON.stringify({ Id: actualId, State: { Running: running }, NetworkSettings: { Networks: { bridge: { IPAddress: '127.0.0.1' } } } })
-    : JSON.stringify({ ok: true, apps })
-  queueMicrotask(() => callback(null, out, ''))
-}
-syncBuiltinESMExports()
+let apps = [], actualId = 'a'.repeat(64), running = true
 const { apply } = await import('../lib/index.js')
 const config = { computerBin: 'fixture-cli', appDomain: 'control.example.org', controlOrigin: 'https://control.example.org', appListenHost: '127.0.0.1', appListenPort: 0 }
 function context() {
@@ -47,24 +37,17 @@ function request(port, url, { method = 'GET', headers = {}, body } = {}) {
   })
 }
 async function setup(t, options = config) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-gateway-apply-'))
-  const old = process.env.COMPUTER_APPS_STATE
-  process.env.COMPUTER_APPS_STATE = root
+  const fixture = await dockerFixture(t, { catalog: apps, containers: () => apps.map(app => containerInfo(actualId, `dsh-app-${app.id}`, Number(app.web?.containerPort), running)) })
   const instance = context()
   const front = http.createServer((req, res) => {
     const route = instance.routes.get(req.url.startsWith('/apps/api') ? '/apps/api' : '/apps/web')
     if (!route) return res.writeHead(404).end()
     Promise.resolve(route.handler(req, res)).catch(() => res.destroy())
   })
-  t.after(async () => {
-    await instance.dispose(); await close(front)
-    if (old === undefined) delete process.env.COMPUTER_APPS_STATE; else process.env.COMPUTER_APPS_STATE = old
-    assert.ok(path.resolve(root).startsWith(path.join(os.tmpdir(), 'dsh-gateway-apply-')))
-    await fs.rm(root, { recursive: true, force: true })
-  })
+  fixture.disposers.push(async () => { await instance.dispose(); await close(front) })
   await apply(instance.ctx, options)
   const port = await listen(front)
-  return { ...instance, port }
+  return { ...instance, port, fixture }
 }
 const auth = { 'x-auth': 'yes' }
 const launch = { ...auth, origin: config.controlOrigin, 'content-type': 'application/json' }
@@ -73,7 +56,7 @@ test('apply owns authenticated isolated gateway and disables BOTH legacy transpo
   const upstream = http.createServer((req, res) => res.end(JSON.stringify({ url: req.url, host: req.headers.host })))
   const upstreamPort = await listen(upstream)
   t.after(() => close(upstream))
-  actualId = 'a'.repeat(64); inspectTargets = []
+  actualId = 'a'.repeat(64); running = true
   apps = [{ id: 'files', containerId: actualId, web: { webHost: 'obsolete.example.test', containerPort: upstreamPort, path: '/apps/web/files/' }, webSockets: ['/ws'] }]
   const instance = await setup(t)
   const gatewayPort = await instance.ready
@@ -101,6 +84,7 @@ test('apply owns authenticated isolated gateway and disables BOTH legacy transpo
   const cookie = session.headers['set-cookie'][0].split(';')[0]
   const app = await request(gatewayPort, '/api/root?path=%2Fa', { headers: { host: descriptor.host, cookie } })
   assert.equal(app.status, 200); assert.equal(app.json.url, '/api/root?path=%2Fa'); assert.equal(app.json.host, descriptor.host)
+  const inspectTargets = instance.fixture.calls.filter(call => /^\/v1\.41\/containers\/[^/]+\/json$/.test(call.path)).map(call => call.path.split('/')[3])
   assert.ok(inspectTargets.length > 0 && inspectTargets.every(target => target === actualId), 'only immutable IDs may be inspected')
   assert.equal((await req('open?id=files', { headers: { ...auth, 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'iframe' } })).status, 403)
   for (const site of ['cross-site', 'same-site']) {
@@ -114,14 +98,20 @@ test('apply owns authenticated isolated gateway and disables BOTH legacy transpo
   assert.equal((await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })).status, 503)
   assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host, cookie } })).status, 502)
   running = true
-  // The catalog still describes the original identity; the daemon is authoritative.
+  // Docker replacement is discovered automatically, without rewriting the catalog.
+  // Cached old-host routing must reject the vanished immutable ID immediately.
   actualId = 'b'.repeat(64)
   assert.equal((await request(gatewayPort, '/api/root', { headers: { host: descriptor.host, cookie } })).status, 502)
-  assert.equal((await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })).status, 503)
-  apps = [{ ...apps[0], containerId: actualId }]
+  const replacementLaunch = await req('launch', { method: 'POST', headers: launch, body: { id: 'files' } })
+  assert.equal(replacementLaunch.status, 200)
+  assert.notEqual(replacementLaunch.json.launch.origin, descriptor.origin, 'launch must never grant the replacement the original origin')
   const replaced = await req('list', { headers: auth })
-  assert.notEqual(replaced.json.apps[0].launch.origin, descriptor.origin)
+  const replacement = replaced.json.apps[0].launch
+  assert.notEqual(replacement.origin, descriptor.origin)
   assert.equal((await request(gatewayPort, '/', { headers: { host: descriptor.host, cookie } })).status, 404)
+  assert.equal((await request(gatewayPort, '/', { headers: { host: replacement.host, cookie } })).status, 401, 'old app session cannot authenticate the replacement')
+  const staleTicket = await request(gatewayPort, '/__dsh_apps/session', { method: 'POST', headers: { host: replacement.host, origin: replacement.origin, 'content-type': 'application/json' }, body: { ticket } })
+  assert.equal(staleTicket.status, 401, 'old launch ticket cannot authenticate the replacement')
   await instance.dispose()
   const rebound = http.createServer()
   await new Promise((resolve, reject) => { rebound.once('error', reject); rebound.listen(gatewayPort, '127.0.0.1', resolve) })

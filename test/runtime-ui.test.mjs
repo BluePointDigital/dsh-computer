@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import fs from 'node:fs/promises'
-import { createRuntimeUI, filterRuntimeApps, runtimeCategory, runtimeNeedsAttention, runtimeStatusLabel, runtimeControls } from '../lib/runtime-ui.js'
+import vm from 'node:vm'
+import { createRuntimeUI, createRuntimeInventoryStore, filterRuntimeApps, runtimeCategory, runtimeNeedsAttention, runtimeStatusLabel, runtimeControls } from '../lib/runtime-ui.js'
 
 test('runtime Applications renders a deployment manager, not adoption/registration gates', () => {
   const UI = createRuntimeUI({ React, api: async () => ({ ok: true, apps: [], deployments: [] }), resolveView: async () => ({}), Viewer: () => null })
@@ -63,4 +64,156 @@ test('management UI provides real streamed logs, xterm transport, owner-click de
   assert.ok(source.includes('setDefinition(null)'))
   assert.ok(source.includes('Save and redeploy'))
   assert.ok(!source.includes("request('approve'"))
+})
+
+
+test('remounted Applications immediately renders cached inventory and disables changes during daemon outage', async () => {
+  const store = createRuntimeInventoryStore(async () => ({ ok: true,
+    apps: [{ id: 'cached-app', name: 'Cached application', state: 'exited', services: [{ state: 'exited' }] }],
+    inventory: { updatedAt: 123, stale: true, dockerAvailable: false }, deployments: [] }))
+  await store.refresh()
+  const render = () => renderToStaticMarkup(React.createElement(createRuntimeUI({ React, api: async () => ({}), inventoryStore: store })))
+  for (const html of [render(), render()]) {
+    assert.ok(html.includes('Cached application'))
+    assert.ok(!html.includes('Loading your applications'))
+    assert.ok(html.includes('Docker daemon unavailable'))
+    assert.match(html, /disabled="" aria-label="Start Cached application"/)
+    assert.match(html, /disabled="">Deploy application/)
+    assert.ok(!html.includes('Make room for your next app'))
+  }
+  store.dispose()
+})
+
+test('unavailable empty inventory is not presented as a confirmed empty daemon', async () => {
+  const store = createRuntimeInventoryStore(async () => ({ ok: true, apps: [], inventory: { stale: true, dockerAvailable: false } }))
+  await store.refresh()
+  const UI = createRuntimeUI({ React, api: async () => ({}), inventoryStore: store })
+  const html = renderToStaticMarkup(React.createElement(UI))
+  assert.ok(html.includes('Applications are unavailable'))
+  assert.ok(html.includes('an empty inventory has not been confirmed'))
+  assert.ok(!html.includes('Make room for your next app'))
+  store.dispose()
+})
+
+// Minimal deterministic hook driver: exercise the real component functions without
+// installing a browser, renderer, DOM shim or another React/UI package.
+function hookDriver() {
+  let cursor = 0, pending = [], writes = 0
+  const slots = []
+  const same = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]))
+  const hooks = {
+    ...React,
+    useState(initial) {
+      const index = cursor++
+      slots[index] ??= { value: typeof initial === 'function' ? initial() : initial }
+      return [slots[index].value, next => { writes++; slots[index].value = typeof next === 'function' ? next(slots[index].value) : next }]
+    },
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial } },
+    useCallback(callback, deps) {
+      const index = cursor++
+      if (!same(slots[index]?.deps, deps)) slots[index] = { deps, callback }
+      return slots[index].callback
+    },
+    useEffect(effect, deps) {
+      const index = cursor++
+      if (!same(slots[index]?.deps, deps)) pending.push(() => {
+        slots[index]?.cleanup?.()
+        slots[index] = { deps, cleanup: effect() }
+      })
+    },
+  }
+  return { hooks, render(component, props) { cursor = 0; return component(props) },
+    flush() { const effects = pending; pending = []; effects.forEach(effect => effect()) },
+    unmount() { slots.forEach(slot => slot?.cleanup?.()) }, get writes() { return writes } }
+}
+function nodes(tree) {
+  if (Array.isArray(tree)) return tree.flatMap(nodes)
+  if (!tree || typeof tree !== 'object') return [tree]
+  return [tree, ...nodes(tree.props?.children)]
+}
+const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
+
+test('details renders inspection before slow stats; only Overview polls stats without overlap or late writes', async () => {
+  const saved = { document: globalThis.document, setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval }
+  const timers = new Map(); let timerId = 0
+  globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} }
+  globalThis.setInterval = callback => { timers.set(++timerId, callback); return timerId }
+  globalThis.clearInterval = id => timers.delete(id)
+  const calls = []; let resolveStats
+  const slowStats = new Promise(resolve => { resolveStats = resolve })
+  const api = async path => {
+    calls.push(path)
+    if (path.startsWith('runtime/details?')) return { ok: true, app: { id: 'app', name: 'Inspected name', state: 'running', services: [{ containerId: 'abc', name: 'web', image: 'nginx', state: 'running' }] }, stats: [] }
+    if (path.startsWith('runtime/stats?')) return slowStats
+    return { ok: true, apps: [], deployments: [] }
+  }
+  const details = hookDriver()
+  const store = createRuntimeInventoryStore(async () => ({ ok: true, apps: [{ id: 'app', name: 'Cached name', state: 'running', services: [{ containerId: 'abc', state: 'running' }] }] }))
+  await store.refresh()
+  try {
+    // Route the outer list and nested details through independent hook lists.
+    const routeDriver = hookDriver()
+    const routeHooks = { ...routeDriver.hooks, useState: initial => {
+      const value = typeof initial === 'function' ? initial() : initial
+      return routeDriver.hooks.useState(value?.type === 'list' ? { type: 'detail', id: 'app', app: store.getSnapshot().apps[0] } : initial)
+    } }
+    const factoryHooks = { ...details.hooks }
+    let outer = true
+    for (const key of ['useState', 'useRef', 'useCallback', 'useEffect']) factoryHooks[key] = (...args) => (outer ? routeHooks : details.hooks)[key](...args)
+    const factory = createRuntimeUI({ React: factoryHooks, api, inventoryStore: store })
+    const detailNode = routeDriver.render(factory)
+    outer = false
+    details.render(detailNode.type, detailNode.props); details.flush()
+    assert.equal(calls.filter(path => path.startsWith('runtime/stats?')).length, 1)
+    await settle()
+    let detailTree = details.render(detailNode.type, detailNode.props)
+    assert.ok(nodes(detailTree).includes('Inspected name'), 'details completes while stats is unresolved')
+    for (const callback of timers.values()) callback()
+    assert.equal(calls.filter(path => path.startsWith('runtime/stats?')).length, 1, 'slow stats never overlaps')
+    nodes(detailTree).find(node => node?.props?.role === 'tab' && node.props.children === 'Logs').props.onClick()
+    detailTree = details.render(detailNode.type, detailNode.props); details.flush()
+    await settle() // Allow the independent details poll to finish first.
+    const writes = details.writes
+    resolveStats({ ok: true, stats: [{ Name: 'web', CPUPerc: '1%' }] })
+    await settle()
+    assert.equal(details.writes, writes, 'leaving Overview ignores late stats')
+    details.unmount()
+    const afterUnmount = details.writes
+    await settle()
+    assert.equal(details.writes, afterUnmount)
+  } finally {
+    details.unmount(); store.dispose()
+    globalThis.document = saved.document; globalThis.setInterval = saved.setInterval; globalThis.clearInterval = saved.clearInterval
+  }
+})
+
+
+test('client cache belongs to apply lifetime, remount uses the cached component and API auth clears it', async () => {
+  const source = (await fs.readFile(new URL('../lib/client.js', import.meta.url), 'utf8'))
+    .replace('exports.apply = apply', 'exports.api = api; exports.apply = apply')
+  let exported, capturedMain, clearError, disposed = 0
+  const cleanup = []
+  vm.runInNewContext(source, {
+    URL,
+    window: { __ModuleLoader__: { load: ({ factory }) => { exported = factory(id => id === 'react' ? React : {}) } } },
+    fetch: async () => ({ status: 401, ok: false, json: async () => ({ ok: false, error: 'denied' }) }),
+  })
+  exported.apply({ effect: callback => cleanup.push(callback()), slots: {
+    inject: (_name, callback) => callback(), register: (options, render) => { if (options.name === 'main') capturedMain = render },
+  } })
+  const panel = capturedMain(), lifetime = panel.props.lifetime
+  lifetime.store = { clear: error => { clearError = error }, dispose: () => { disposed++ } }
+  lifetime.component = () => null
+  // The real React element can be server-rendered without running useEffect or
+  // importing the asset: the already-loaded component renders on the first pass.
+  assert.equal(renderToStaticMarkup(React.createElement(panel.type, panel.props)), '')
+  await assert.rejects(exported.api('runtime/details?id=app'), /denied/)
+  assert.equal(clearError.status, 401)
+  cleanup.forEach(dispose => dispose())
+  assert.equal(disposed, 1)
+  assert.equal(lifetime.disposed, true)
+  assert.equal(lifetime.store, null)
+  assert.equal(lifetime.component, null)
+  assert.ok(source.includes('/apps/assets/runtime-ui.js?v=0.7.0'))
+  assert.ok(!/localStorage|sessionStorage|indexedDB/.test(source))
 })

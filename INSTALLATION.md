@@ -1,5 +1,11 @@
 # Applications installation and gateway contract
 
+> **Direct Docker update — 0.7.0 preparation, 2026-10-21:** this checkout is
+> preparing **0.7.0**, **not installed, released or restarted**. Older deployment
+> and test notes below are historical scope, not a claim that this source is live.
+> See [Direct Docker verification](<DIRECT-DOCKER-VERIFICATION.md>) for the current
+> source benchmark, pending test count and deferred activation handoff.
+
 The isolated-origin gateway is **implemented/tested source, not deployed**. This
 document specifies deployment prerequisites, not live success. Deterministic tests
 and scratch Chromium gateway acceptance passed; see [verification evidence](<GATEWAY-VERIFICATION.md>)
@@ -37,6 +43,73 @@ Real Compose smoke (`npm run test:runtime-live`) passed deployment, retained-dat
 is `npm run test:runtime-browser`. No release, dependency installation or harness
 restart for this feature is claimed. Hosting and shared-host port setup below
 remain unchanged; release/activation still follows [DEVELOPING.md](DEVELOPING.md).
+
+## Direct Engine prerequisites and rollout
+
+The approved refactor uses one shared [ApplicationRuntime](<lib/application-runtime.js>)
+Engine snapshot for server inventory/details and gateway discovery, backed by
+[native Unix-socket HTTP](<lib/docker-engine.js>). It does not need a new public
+service, socket publication, per-app registration or state/container migration.
+
+| Target input | Supported behavior |
+|---|---|
+| Unset `DOCKER_HOST` | Local `/var/run/docker.sock` |
+| `DOCKER_HOST=unix:///absolute/socket/path` | That exact local Unix socket, reachable by the DSH process |
+| `DOCKER_API_VERSION` | Optional explicit version within daemon overlap and supported **1.41–1.47** range; otherwise negotiate the highest overlap |
+| `DOCKER_CONTEXT` | Unset or `default`; nondefault values fail explicitly |
+| TCP/SSH/other remote endpoint or Docker TLS settings | Explicitly unsupported; no fallback to another target |
+
+Do not expose Docker over a public TCP socket/API or proxy it through the app
+listeners. The remaining provisioning/Compose CLI executor receives the same
+selected Unix `DOCKER_HOST` and cleared context, while retaining its controlled
+Compose environment/private Docker config. Compose v2 remains required for
+saved deployments and project lifecycle; image/create provisioning and
+specialized workspace-box/interactive CLI commands remain CLI exceptions. Engine
+unavailability is not permission to fall back to a shell inventory or remote daemon.
+
+The shared server cache has a **3-second** fresh window and coalesces refreshes.
+Ordinary expired reads return the last snapshot while refreshing; explicit Refresh
+waits for fresh inventory. **Cold failure returns 503**; warm failure serves
+last-known apps marked with `updatedAt`, `stale`, `refreshing` and
+`dockerAvailable`, not an apparently successful empty list. The UI retains its
+sanitized last snapshot across panel remounts, polls every **5 seconds while
+visible**, and revalidates immediately when visible again. Server/client caches
+are **memory-only**; authentication rejection clears the client cache. Overview
+stats are fetched separately and cannot block app inventory/details.
+
+The CLI shares the inventory implementation and durable metadata, not the server's
+in-memory cache. Existing catalog, registry, registrations, deployment definitions,
+jobs, secrets, endpoint/port settings and container data remain durable and
+unchanged in format/location. No migration script, adoption, container recreation
+or volume rewrite is needed for this refactor. State backup still matters.
+
+Cached display data never authorizes actions: lifecycle/log/TTY operations freshly
+resolve membership and inspect the selected immutable full container ID. Gateway
+dispatch freshly inspects its targeted full ID and rechecks current
+ownership/project/endpoint metadata and running state before dialing, failing
+closed on absence, replacement or uncertainty. It shares inventory without
+repeating all-daemon discovery for each app asset. Cancelling an exec or closing
+a terminal closes its transport; **it does not guarantee the in-container process
+or descendants were killed**.
+
+### Deferred production activation and rollback
+
+The proposed pin change is **0.6.3 → 0.7.0**, after verification and publication.
+Use the **approved plugin-manager installation path**: first list installed
+bundles for their exact identifiers, then obtain the required owner approval for
+the reviewed release. Do not directly edit production profiles, manually change
+pins/locks, or run the checkout/link installer as an upgrade shortcut.
+
+Before rollout, back up private app state **outside the synced workspace**, and
+preserve the current production pin/lockfile and relevant instance configuration.
+Keep private definitions, environment values and credentials out of this checkout.
+Coordinate activation **after the active turn**, then refresh and verify the
+existing DSH GUI/URL and intended ingress; never restart mid-turn. Rollback
+reinstalls the prior reviewed release pin using the same approved path and
+coordinates activation. It is a code rollback, **not permission to overwrite app
+data or restore stale app-data backups**. See the
+[release procedure](<DEVELOPING.md#releasing-the-production-path>) and
+[verification handoff](<DIRECT-DOCKER-VERIFICATION.md>).
 
 ## Shared-host application ports (default)
 

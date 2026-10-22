@@ -1,5 +1,11 @@
 # Developing this repo
 
+> **Direct Docker update — 0.7.0 preparation, 2026-10-21:** version **0.7.0** is
+> being prepared in source only. This refactor has **not been installed, released
+> or restarted**. Historical test/deployment notes below are not evidence that
+> older deployments run this source. Current benchmark and pending test results:
+> [Direct Docker verification](<DIRECT-DOCKER-VERIFICATION.md>).
+
 Development, release installation and activation are separate operations. The
 isolated-origin gateway described here is **implemented/tested source, not deployed**.
 Deterministic tests and scratch Chromium acceptance passed; production GUI/ingress
@@ -27,7 +33,7 @@ while dependencies and the box home are excluded by
 | `node_modules/dsh-applications` | a fetched release | a **symlink** to your checkout |
 | Edits take effect | only after installing the new release, then activation below | files change immediately; loaded server modules still need a restart |
 | Reproducible | pinned release + lockfile | whatever is on disk |
-| How you get it | edit profile dependency, `pnpm install` | [bin/install.sh](bin/install.sh) from the checkout |
+| How you get it | approved plugin-manager bundle installation of the reviewed release pin | [bin/install.sh](bin/install.sh) from the checkout |
 
 **[bin/install.sh](bin/install.sh) always produces the `link:` shape**
 (`WANT_LINK="link:$REL_PATH"`) and refuses a profile declaring a `github:` specifier.
@@ -46,12 +52,12 @@ git commit -m "<version>: <release summary>"
 git tag -a v<version> -m "<release summary>"
 git push origin main v<version>
 
-# 2. On each instance, separately: point the profile at the released tag.
-$EDITOR /data/profiles/web/package.json
-# Run in the profile directory:
-pnpm install --no-frozen-lockfile
+# 2. Separately obtain owner approval for the plugin-manager installation.
+# List installed bundles first, then install the reviewed pinned release through
+# the approved plugin-manager path. Do not directly edit a live profile or use
+# the checkout/link installer to bypass that path.
 
-# 3. Activate as appropriate below; then verify the installed package and GUI.
+# 3. After the turn, coordinate activation as below and verify the existing GUI.
 /data/skills/docker-computer/bin/computer apps list --json
 ```
 
@@ -59,6 +65,26 @@ A checkout edit or documentation update does not perform any of these deployment
 steps. Prefer a pinned release over `link:` for anything intended to remain in
 production. Installing dependencies may replace package directories; durable state
 must not live inside them.
+
+### Proposed 0.6.3 → 0.7.0 rollout (deferred)
+
+This is a handoff, not authorization to deploy during source work. The proposed
+production pin moves **0.6.3 → 0.7.0** only after review, completed verification and
+a published release. Use the **approved plugin-manager path**, listing installed
+bundles to obtain the exact identifier before installation; honor its approval,
+compatibility and build-script checks. No direct profile dependency/patch edits,
+manual production `pnpm install` shortcut, symlink or checkout installer.
+
+Before rollout, back up the private app state outside the synced tree and preserve
+the current production pin/lockfile (and relevant instance configuration) for
+rollback. Do not copy credentials or private definitions into this repository.
+There are **no state/container schema migrations** in this refactor. Installing a
+package does not justify container recreation or app-data changes. Coordinate the
+server restart **after the active turn**, then refresh and verify the existing DSH
+URL, inventory/stale behavior, details/stats, lifecycle, logs/TTY and gateway.
+Rollback reinstalls the prior reviewed pin through the same approved path and
+coordinates activation; **do not overwrite app data or restore an older state
+backup over live application data** merely to roll back code.
 
 ## What needs a restart, and what does not
 
@@ -89,9 +115,19 @@ Discovery is not adoption and does not reconstruct an original deployment source
 The older catalog/import/prepare APIs remain compatibility paths, not inventory
 registration requirements.
 
-- [runtime-inventory.js](lib/runtime-inventory.js) reads Docker state and supplies
-  grouped, sanitized inventory/details; endpoint selection remains separate from
-  deployment ownership.
+- [application-runtime.js](<lib/application-runtime.js>) owns one coalesced,
+  memory-only all-container Engine snapshot with a **3-second** fresh window,
+  shared by inventory/details/legacy listing and gateway discovery.
+  [runtime-inventory.js](<lib/runtime-inventory.js>) groups/sanitizes the same
+  inspections; [catalog.js](<lib/catalog.js>) reads durable flat metadata directly
+  without a Docker/CLI call. Endpoint selection remains separate from ownership.
+- [docker-engine.js](<lib/docker-engine.js>) is a native Node HTTP/Unix-socket
+  transport, negotiating **API 1.41–1.47**. Default `/var/run/docker.sock` or an
+  absolute `unix://` `DOCKER_HOST` only; explicit API versions must overlap the
+  daemon. Nondefault contexts, remote endpoints and TLS settings fail explicitly;
+  never publish a Docker socket/API as a workaround. Retained Compose/provisioning
+  CLI execution receives the same selected socket in `DOCKER_HOST`, with
+  `DOCKER_CONTEXT` cleared, rather than drifting to a different daemon.
 - [deployments.js](lib/deployments.js) saves private definitions/environment,
   revision documents and job journals, then runs prebuilt images through Compose
   v2. Builds/Git contexts are not V1. Interrupted execution is failed for explicit
@@ -101,6 +137,29 @@ registration requirements.
 - [runtime-ui.js](lib/runtime-ui.js) is loaded through the same plugin at
   `/apps/assets/runtime-ui.js`, alongside terminal assets. [index.js](lib/index.js)
   owns the runtime APIs/routes; it is not a second app/server/sidebar registration.
+
+Inventory cache expiry returns the last snapshot while one background refresh
+runs; explicit Refresh waits for a new read. Cold failure is **503**, while warm
+failure is stale last-known inventory, not empty success. Inventory reports
+`updatedAt`, `stale`, `refreshing` and `dockerAvailable`. The client keeps a
+sanitized **memory-only** last snapshot across panel remounts, polls every **5
+seconds while visible**, immediately revalidates on visibility return, and clears
+on authentication rejection/disposal. Stats are separately requested for Overview;
+they do not block inventory/details. No inventory cache file or schema migration
+is introduced.
+
+Cached display data is not authority: lifecycle/log/TTY resolution performs fresh
+membership and selected full-ID inspection, with project/owner checks. Gateway
+HTTP/WS dispatch performs a targeted fresh full-ID inspection and current
+ownership/endpoint validation; it does not scan the daemon per asset or trust a
+stale address. Missing/replaced/uncertain backends fail closed.
+
+CLI inventory uses the same runtime and grouping code, with its own per-process
+cache. CLI exceptions remain explicit: Compose deployment and project lifecycle,
+image/create provisioning, missing catalog-container creation, workspace-box/CDP,
+interactive CLI exec and specialized diagnostics. They are not shell inventory
+fallbacks. Request/exec cancellation and terminal disposal close transport and
+local resources, **not a guaranteed kill of the in-container exec process**.
 
 Provision Compose with `node bin/install-compose.mjs`: pinned v2.40.3,
 release-checksum verification, private persistent `$DSH_HOME/tools/docker/cli-plugins/`
@@ -225,13 +284,14 @@ Run `npm run test:tls` for lifecycle, certificate, route auth and UI regressions
 Install checkout dependencies reproducibly with
 [npm's lockfile](package-lock.json); `--legacy-peer-deps` avoids trying to resolve
 the DSH host peer packages as standalone npm dependencies. This is separate from
-a production profile's `pnpm install`.
+a production plugin-manager installation.
 
 ```bash
 npm ci --legacy-peer-deps
 bash test/apps-password.test.sh     # password resolution order
 node test/proxy.test.mjs            # legacy rewrites, gzip guard, SSE, real WS frames
-npm test                           # deterministic installer + existing regressions
+npm test                           # full regression run; 0.7.0 final count pending lead completion
+node --test test/docker-engine.test.mjs test/catalog-reader.test.mjs test/application-runtime.test.mjs test/runtime-cache.test.mjs
 node --test test/host-router.test.mjs test/host-mount-apply.test.mjs
 RUN_INSTALLER_SMOKE=1 node test/installer-browser.test.mjs
 RUN_DESKTOP_SMOKE=1 node test/desktop.test.mjs

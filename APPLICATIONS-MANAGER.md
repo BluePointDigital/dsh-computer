@@ -1,5 +1,12 @@
 # Runtime Applications manager
 
+> **Direct Docker update — 0.7.0 preparation, 2026-10-21:** this checkout is
+> preparing version **0.7.0**; the refactor is **not installed, released or
+> restarted**. Earlier acceptance results below describe their earlier source
+> scope, not verification of this refactor or proof of what older deployments
+> currently run. Current evidence and the pending test handoff are in
+> [Direct Docker verification](<DIRECT-DOCKER-VERIFICATION.md>).
+
 The Applications page is a deployment and management interface: **Portainer-style
 visibility with CapRover-style simple deployment**, while apps open within the
 harness. Docker is the runtime source of truth, not a catalog registration gate.
@@ -34,6 +41,64 @@ container web port and entry path in its endpoint controls. This changes launch
 metadata, not container ownership or deployment configuration. Apps without a web
 endpoint remain manageable. Existing shared-host port behavior is unchanged; see
 [the hosting contract](INSTALLATION.md#shared-host-application-ports-default).
+
+## Direct Docker runtime and freshness
+
+[ApplicationRuntime](<lib/application-runtime.js>) owns one shared Engine API
+snapshot for this server/plugin lifetime. Inventory, details, the compatibility
+listing and gateway host discovery consume that snapshot, rather than spawning
+separate shell inventories. A refresh performs one all-container Engine listing
+and bounded concurrent full-ID inspections, then merges catalog, registry,
+registration and saved-deployment metadata. [Catalog](<lib/catalog.js>) reads the
+existing durable flat catalog directly; reading metadata never starts a container.
+
+[DockerEngine](<lib/docker-engine.js>) uses Node's native HTTP transport over a
+**local Unix socket**, default `/var/run/docker.sock`, or an absolute
+`unix://` `DOCKER_HOST`. It negotiates the daemon overlap within **API 1.41–1.47**;
+an explicit `DOCKER_API_VERSION` must be within that overlap. Nondefault
+`DOCKER_CONTEXT`, remote/TCP/SSH endpoints and Docker TLS configuration fail
+explicitly; they do not silently select another daemon. Do not expose a public
+Docker socket/API to enable this feature. Retained Compose/provisioning commands
+receive the same selected Unix target through their execution environment.
+
+- **Server cache: 3 seconds**, with concurrent refresh coalescing and
+  stale-while-revalidate reads. The gateway shares it; app assets do not each
+  trigger an all-daemon inventory. Explicit Refresh waits for fresh inventory.
+- **UI poll: 5 seconds while visible**, with immediate revalidation when visible
+  again. Its sanitized last snapshot survives panel remounts within the client
+  plugin lifetime. Refresh does not clear the app list or replace it with a spinner.
+- A **cold Docker failure returns HTTP 503**, not a successfully empty inventory.
+  A warm failure keeps the last snapshot with `updatedAt`, `stale`, `refreshing`
+  and `dockerAvailable` flags/warnings. The UI retains the last apps and disables
+  runtime changes when Docker is reported unavailable. Authentication rejection
+  clears the client cache. Neither server nor UI inventory cache is persisted.
+- Resource usage is a **separate stats request**, not a prerequisite for inventory
+  or details. Overview polls stats separately; metric failures must not hide apps.
+
+Display snapshots are **not security or mutation authority**. Lifecycle, logs and
+TTY setup freshly resolve membership and inspect the selected immutable full
+container ID; project/ownership checks must still pass. Gateway dispatch uses a
+**targeted fresh inspection** of its selected full ID, current ownership/endpoint
+metadata and running state before dialing. Missing/replaced/uncertain identities
+fail closed; stale display data cannot authorize a replacement or cached address.
+
+The CLI uses the same inventory and grouping implementation, but a separate CLI
+process has its own short-lived cache, not access to server memory. Direct Engine
+runtime reads, supported existing-container lifecycle, logs, stats and exec/TTY do
+not imply every Docker CLI call was removed. Compose deployment/redeploy/rollback
+and project lifecycle, image/create provisioning and missing-container catalog
+launch still use their existing specialized CLI paths. Workspace-box, CDP,
+interactive CLI exec and specialized diagnostics remain CLI exceptions. These
+are not inventory fallbacks after an Engine failure.
+
+Closing a terminal, cancelling a request or hitting an exec timeout closes the
+transport and releases local resources. **It does not guarantee Docker killed the
+exec process or its descendants**; inspect the container and stop the process
+explicitly when that matters.
+
+Durable catalog, installed/registered metadata, endpoint settings, port assignments,
+definitions, jobs, secrets and app data retain their formats and locations. **No
+state/container schema migration or adoption is required by this refactor.**
 
 ## Deploy application
 
@@ -144,9 +209,12 @@ containers.
 The existing plugin loads [runtime-ui.js](lib/runtime-ui.js) from
 `/apps/assets/runtime-ui.js`; this is not a separate application/server or a second
 Applications sidebar entry. [index.js](lib/index.js) owns authenticated runtime
-APIs and asset/terminal routes. The main modules are
-[runtime-inventory.js](lib/runtime-inventory.js), [deployments.js](lib/deployments.js)
-and [runtime-console.js](lib/runtime-console.js).
+APIs and asset/terminal routes. The shared runtime is
+[application-runtime.js](<lib/application-runtime.js>), backed by
+[docker-engine.js](<lib/docker-engine.js>) and [catalog.js](<lib/catalog.js>).
+[runtime-inventory.js](<lib/runtime-inventory.js>) groups/sanitizes the snapshot;
+[deployments.js](<lib/deployments.js>) and
+[runtime-console.js](<lib/runtime-console.js>) own deployment and console work.
 
 ```bash
 npm run test:runtime-browser  # Chromium UI acceptance with fixture backend

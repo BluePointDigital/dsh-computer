@@ -15,7 +15,7 @@ function list(extra = '', viewer = false) {
   const file = join(dir, 'apps.yaml')
   writeFileSync(file, `apps:\n  - id: example\n    image: fixture\n    ${viewer ? 'viewer: 6081:6080' : 'web: 8090:80'}\n${extra}\n`)
   return spawnSync('bash', [cli, 'apps', 'list', '--json'], { encoding: 'utf8', env: {
-    ...process.env, PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
+    ...process.env, COMPUTER_APPS_LEGACY: '1', PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
     COMPUTER_APPS_STATE: join(dir, 'state'), DSH_HOME: dir,
   } })
 }
@@ -79,7 +79,7 @@ test('webHost without a web mapping fails rather than doing nothing', () => {
   const file = join(dir, 'apps-nohost.yaml')
   writeFileSync(file, 'apps:\n  - id: example\n    image: fixture\n    webHost: files.example.com\n')
   const out = spawnSync('bash', [cli, 'apps', 'list', '--json'], { encoding: 'utf8', env: {
-    ...process.env, PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
+    ...process.env, COMPUTER_APPS_LEGACY: '1', PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
     COMPUTER_APPS_STATE: join(dir, 'state'), DSH_HOME: dir,
   } })
   assert.equal(out.status, 1)
@@ -89,7 +89,7 @@ test('the same webHost on two apps fails, including case/trailing-dot variants',
   const file = join(dir, 'apps-duphost.yaml')
   writeFileSync(file, 'apps:\n  - id: one\n    image: fixture\n    web: 8090:80\n    webHost: files.example.com\n  - id: two\n    image: fixture\n    web: 8091:80\n    webHost: FILES.example.com.\n')
   const out = spawnSync('bash', [cli, 'apps', 'list', '--json'], { encoding: 'utf8', env: {
-    ...process.env, PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
+    ...process.env, COMPUTER_APPS_LEGACY: '1', PATH: `${dir}:${process.env.PATH}`, COMPUTER_BIND_IP: '127.0.0.1', COMPUTER_APPS_FILE: file,
     COMPUTER_APPS_STATE: join(dir, 'state'), DSH_HOME: dir,
   } })
   assert.equal(out.status, 1)

@@ -16,6 +16,12 @@ whenToUse: >-
 
 # Docker Computer
 
+> **Direct Docker update — 0.7.0 preparation, 2026-10-21:** this checkout is
+> preparing **0.7.0**, **not installed, released or restarted**. Older measured
+> behavior below is historical evidence, not proof that deployments run this
+> source. Current benchmark/test handoff:
+> [Direct Docker verification](<DIRECT-DOCKER-VERIFICATION.md>).
+
 A machine, not a command. This runs **one named container you keep**, with a
 bind-mounted home directory, a virtual display, and passwordless sudo inside.
 
@@ -332,20 +338,21 @@ cursor. If the user is driving, your clicks fight theirs, and a resize or a wind
 the user moves invalidates coordinates you computed a moment ago. Announce when
 you take the wheel, and `shot` before you act rather than trusting stale state.
 
-## Applications — the machine-level catalog
+## Applications — machine-level inventory and catalog
 
-`computer up` gives **one workspace** a box. `computer apps` runs **the machine's**
-applications: a catalog of launchable containers that belongs to no workspace.
+`computer up` gives **one workspace** a box. `computer apps` manages applications
+visible to **this instance's nested Docker daemon**, independent of workspace.
+Current source uses the same direct Engine inventory/grouping implementation as
+the GUI, including discovered containers and Compose projects, not a label-filtered
+shell listing. Discovery does not adopt a container or reconstruct its saved source.
 
-The split is deliberate. Which applications exist and which are running is a
-property of the *machine*, not of one project — so the catalog lives beside this
-skill and per-app state lives in Docker, which is the registry of record.
-`apps list` is a view over `docker ps` filtered by label, so there is no second
-state file to drift. (This is the one part of the skill that is not
-workspace-resolved, and it should stay that way.)
+Docker is runtime truth; the durable private catalog, installed/registered metadata,
+saved definitions/jobs and endpoint settings enrich it. The catalog is seeded in
+private app state, not a mutable package-side source of truth. None of these
+formats/locations needs migration for the direct Docker refactor.
 
 ```bash
-$C apps list                 # catalog + live state
+$C apps list --json          # shared Engine inventory + metadata/freshness flags
 $C apps up desktop           # launch; prints the viewer URL + password
 $C apps status desktop       # EFFECTIVE posture, read back from the daemon
 $C apps exec desktop bash    # shell inside a running app
@@ -429,6 +436,35 @@ have shell access to. Running it to approve your own proposal is a policy
 violation: the review card exists because a human must evaluate the plan.
 
 ### Runtime Applications manager
+
+**Direct runtime contract:** one [shared server snapshot](<lib/application-runtime.js>)
+uses [native local Unix-socket Engine HTTP](<lib/docker-engine.js>), default
+`/var/run/docker.sock` or absolute `unix://` `DOCKER_HOST`, with negotiated API
+**1.41–1.47**. An explicit API version must overlap the daemon. Nondefault Docker
+contexts, remote/TCP/SSH endpoints and TLS configuration fail explicitly; never
+publish a public Docker socket to work around that boundary. Remaining
+Compose/provisioning execution receives the same Unix target, not another daemon.
+
+The server's **3-second**, coalesced, memory-only cache is shared with gateway
+inventory. UI polling is **5 seconds while visible**, with immediate revalidation
+on return and a sanitized last snapshot retained across panel remounts. Cold
+failure is **503**; warm failure preserves stale apps with `updatedAt`, `stale`,
+`refreshing` and `dockerAvailable`, not confirmed emptiness. Authentication failure
+clears the client cache. Resource stats load separately from inventory/details.
+A separate CLI invocation uses the same inventory code, not the server's memory.
+
+Display cache is not authority. Lifecycle/log/TTY selection freshly checks
+membership and immutable full-ID ownership. Gateway dispatch freshly inspects the
+selected full ID/current endpoint and fails closed on missing/replaced/uncertain
+identity, without a full daemon scan per app asset. Exec cancellation/timeouts and
+terminal closure release transport/resources; **they do not guarantee process
+termination inside the container**.
+
+CLI exceptions remain: Compose deploy/redeploy/rollback/project lifecycle,
+image/create provisioning, catalog creation when a container is missing,
+workspace-box/CDP, interactive CLI exec and specialized diagnostics. These are
+not fallbacks for failed Engine inventory. Preserve durable private metadata and
+app data: no state/container schema migration is part of this refactor.
 
 The new page discovers **all nested Docker containers** automatically and groups
 Compose projects with their services. No registration, migration or adoption is
@@ -530,19 +566,23 @@ It is a two-slot registration, which is all the layout asks for:
 | `sidebar.panellist` | list | the icon + label. The sidebar owns the button and calls `ctx.layout.selectPanel(id)` itself |
 | `main` | keyed | the panel body, under the same `id`/`key` |
 
-The server half serves `/apps/api` over `computer apps`:
+The server half serves authenticated runtime and compatibility routes from the
+shared direct runtime (not a subprocess inventory):
 
 ```
-GET  /apps/api/list      catalog + live state
-POST /apps/api/action    { action: up|down|rm, id }
+GET  /apps/api/runtime/inventory    apps + deployments + freshness flags
+GET  /apps/api/runtime/details      cached sanitized details; stats are separate
+GET  /apps/api/runtime/stats        resource usage for the selected application
+GET  /apps/api/list                 compatibility listing of the same inventory
+POST /apps/api/action               compatibility lifecycle/provisioning dispatch
 ```
 
 Design notes worth keeping:
 
-- **The route is a thin wrapper, not a second implementation.** It knows no
-  images; the only caller-supplied value that reaches a subprocess is an app id,
-  shape-checked and then re-validated by the CLI against `apps.yaml`. `execFile`
-  with an argv array, never a shell.
+- **One inventory implementation, not a CLI round-trip per request.**
+  [index.js](<lib/index.js>) uses [ApplicationRuntime](<lib/application-runtime.js>)
+  and [Catalog](<lib/catalog.js>) directly. The CLI shares that code; retained
+  provisioning/Compose paths remain explicit exceptions with validated fixed argv.
 - **Gate with `ctx.connection.requestRejection(req)`**, not a hand-rolled fence.
   It applies the Host/Origin fence *and* browser authentication. A local fence
   left this the only route in the app that answered without a session.
@@ -555,6 +595,13 @@ Design notes worth keeping:
 - The viewer receives the per-app VNC password through the authenticated launch.
   Gateway mode also offers an authenticated **top-level launch** for incompatible
   framing/cookies. There is no automatic shared-origin or published-port fallback.
+
+The proposed production **0.6.3 → 0.7.0** update is deferred: publish/review and
+use the approved plugin-manager path, not direct live-profile edits or this link
+installer. Back up private state outside sync and preserve the prior pin/lockfile
+before rollout. Coordinate activation after the active turn. Roll back by restoring
+the prior reviewed code pin through that path, **never by overwriting app data**.
+See [the deferred rollout procedure](<DEVELOPING.md#releasing-the-production-path>).
 
 Development checkout install — not a production update:
 

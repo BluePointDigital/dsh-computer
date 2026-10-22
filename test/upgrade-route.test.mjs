@@ -1,23 +1,12 @@
-/** Deterministic integration: real HTTP/WS, mocked CLI/daemon, no container deletion. */
+/** Deterministic integration: real HTTP/WS and private Unix Engine API, no real Docker. */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import http from 'node:http'
 import crypto from 'node:crypto'
-import childProcess from 'node:child_process'
-import { syncBuiltinESMExports } from 'node:module'
+import { dockerFixture, containerInfo } from './helpers/docker-fixture.mjs'
 
+const CID = 'a'.repeat(64)
 let apps = []
-let inspectCalls = 0
-let delayed = null
-const originalExec = childProcess.execFile
-childProcess.execFile = (bin, args, _opts, callback) => {
-  if (bin === 'docker') {
-    inspectCalls++
-    queueMicrotask(() => callback(null, JSON.stringify({ NetworkSettings: { Networks: { bridge: { IPAddress: '127.0.0.1' } } } }), ''))
-  } else if (delayed) delayed.push(callback)
-  else queueMicrotask(() => callback(null, JSON.stringify({ ok: true, apps }), ''))
-}
-syncBuiltinESMExports()
 const { apply } = await import('../lib/index.js')
 
 function context() {
@@ -34,7 +23,7 @@ function context() {
       },
     },
   }
-  return { ctx, routes, upgrades, dispose: () => disposers.reverse().forEach((fn) => fn()) }
+  return { ctx, routes, upgrades, async dispose() { while (disposers.length) await disposers.pop()() } }
 }
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 function request(port, path, auth = true, method = 'GET') {
@@ -70,8 +59,9 @@ function upgrade(port, path, auth = true, origin) {
   })
 }
 
-test('registered upgrades: gate, catalog refresh, collision, disposal and real bytes', async (t) => {
-  const seen = []
+test('registered upgrades: gate, catalog refresh, collision, disposal and real bytes', { timeout: 15000 }, async (t) => {
+  const seen = [], sockets = new Set()
+  const trackSockets = server => server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
   const backend = http.createServer((req, res) => {
     if (req.url === '/events') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: active\n\n'); return }
     if (req.url === '/slow') return
@@ -84,10 +74,13 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
     socket.on('data', () => socket.write(Buffer.from([0x81,4,112,105,110,103])))
     socket.on('error', () => {})
   })
+  trackSockets(backend)
   const bp = await listen(backend)
   apps = [{ id: 'demo', web: { containerPort: bp }, webSockets: ['/websockify'] }]
+  const fixture = await dockerFixture(t, { catalog: apps, containers: () => [containerInfo(CID, 'dsh-app-demo', bp)] })
+  const inspectCalls = () => fixture.calls.filter(call => call.path === `/v1.41/containers/${CID}/json`).length
   const c = context()
-  apply(c.ctx, { computerBin: 'fixture-cli' })
+  await apply(c.ctx, { computerBin: 'must-not-execute' })
   const front = http.createServer((req, res) => {
     const route = c.routes.get(req.url.startsWith('/apps/api') ? '/apps/api' : '/apps/web')
     Promise.resolve(route.handler(req, res)).catch((error) => res.destroy(error))
@@ -97,8 +90,14 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
     if (!route) { socket.destroy(); return }
     Promise.resolve(route.handler(req, socket, head)).catch(() => socket.destroy())
   })
+  trackSockets(front)
   const fp = await listen(front)
-  t.after(() => { c.dispose(); front.closeAllConnections(); front.close(); backend.closeAllConnections(); backend.close(); childProcess.execFile = originalExec; syncBuiltinESMExports() })
+  fixture.disposers.push(async () => {
+    await c.dispose()
+    for (const socket of sockets) socket.destroy()
+    front.closeAllConnections(); backend.closeAllConnections()
+    await Promise.all([new Promise(resolve => front.close(resolve)), new Promise(resolve => backend.close(resolve))])
+  })
 
   await t.test('first request awaits activation and advertises owned sockets', async () => {
     const res = await request(fp, '/apps/web/demo/', true, 'HEAD')
@@ -106,14 +105,14 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
     assert.ok(c.upgrades.has('/apps/web/demo/websockify'))
   })
   await t.test('unauthenticated upgrade is rejected before any daemon lookup', async () => {
-    const before = inspectCalls
+    const before = inspectCalls()
     assert.equal((await upgrade(fp, '/apps/web/demo/websockify', false)).status, 401)
-    assert.equal(inspectCalls, before)
+    assert.equal(inspectCalls(), before)
   })
   await t.test('cross-origin upgrade uses gate and is denied before daemon lookup', async () => {
-    const before = inspectCalls
+    const before = inspectCalls()
     assert.equal((await upgrade(fp, '/apps/web/demo/websockify', true, 'https://evil.example')).status, 403)
-    assert.equal(inspectCalls, before)
+    assert.equal(inspectCalls(), before)
   })
   await t.test('authenticated upgrade preserves query and echoes real frames', async () => {
     assert.deepEqual(await upgrade(fp, '/apps/web/demo/websockify?token=abc'), { status: 101, text: 'ping' })
@@ -123,6 +122,7 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
   })
   await t.test('list refresh adds and removes socket routes without restart', async () => {
     apps[0].webSockets = ['/changed']
+    await fixture.writeCatalog(apps)
     assert.equal((await request(fp, '/apps/api/list')).status, 200)
     assert.ok(c.upgrades.has('/apps/web/demo/changed')); assert.ok(!c.upgrades.has('/apps/web/demo/websockify'))
     assert.equal((await upgrade(fp, '/apps/web/demo/changed')).text, 'ping')
@@ -130,6 +130,7 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
   await t.test('registration collision does not advertise ws', async () => {
     c.upgrades.set('/apps/web/demo/collision', { handler() {} })
     apps[0].webSockets = ['/collision']
+    await fixture.writeCatalog(apps)
     await request(fp, '/apps/api/list')
     const res = await request(fp, '/apps/web/demo/', true, 'HEAD')
     assert.ok(!res.headers['x-dsh-app-proxy-features'].includes('ws'))
@@ -138,9 +139,11 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
     const res = await request(fp, '/apps/web/demo?q=1')
     assert.equal(res.headers.location, '/apps/web/demo/?q=1')
   })
-  await t.test('disposal closes open SSE and upstream requests still awaiting headers', async () => {
-    const streams = context(); apply(streams.ctx, { computerBin: 'fixture-cli' })
+  await t.test('disposal closes open SSE and upstream requests still awaiting headers', { timeout: 4000 }, async sub => {
+    const streams = context(); await apply(streams.ctx, { computerBin: 'must-not-execute' })
     const sf = http.createServer((req, res) => streams.routes.get('/apps/web').handler(req, res))
+    trackSockets(sf)
+    sub.after(async () => { await streams.dispose(); sf.closeAllConnections(); await new Promise(resolve => sf.close(resolve)) })
     const sp = await listen(sf)
     const started = () => new Promise((resolve) => backend.once('request', resolve))
     const slowSeen = started()
@@ -157,17 +160,21 @@ test('registered upgrades: gate, catalog refresh, collision, disposal and real b
       sseReq.on('error', () => {})
       // Resolve with an object to avoid promise assimilation while SSE is open.
     })
-    streams.dispose()
+    await streams.dispose()
     await Promise.race([Promise.all([slowClosed, sseClosed]), new Promise((_, reject) => setTimeout(() => reject(new Error('streams survived disposal')), 1500))])
-    slow.destroy(); sseReq.destroy(); sf.closeAllConnections(); sf.close()
+    slow.destroy(); sseReq.destroy()
   })
   await t.test('disposal prevents pending catalog reads from installing orphan routes', async () => {
-    delayed = []
-    const other = context(); apply(other.ctx, { computerBin: 'fixture-cli' })
-    other.dispose()
-    for (const callback of delayed) callback(null, JSON.stringify({ ok: true, apps }), '')
-    delayed = null
+    let release, entered
+    const pending = new Promise(resolve => { release = resolve })
+    const started = new Promise(resolve => { entered = resolve })
+    fixture.beforeList = async () => { entered(); await pending }
+    const other = context(); await apply(other.ctx, { computerBin: 'must-not-execute' })
+    await started
+    await other.dispose()
+    release(); fixture.beforeList = null
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(other.upgrades.size, 0)
+    assert.equal(other.routes.size, 0)
   })
 })

@@ -11,6 +11,8 @@
 # Uses `apps url`, which resolves an app and reads the viewer URL without Docker,
 # so this needs no daemon and starts nothing.
 set -uo pipefail
+# These regressions target the retained creation-only shell resolver, not runtime discovery.
+export COMPUTER_APPS_LEGACY=1
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPUTER="$HERE/../bin/computer"
