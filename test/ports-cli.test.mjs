@@ -6,6 +6,7 @@ import os from 'node:os'
 import http from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { gatewayConfig, describeApps } from '../lib/app-launch.js'
 const exec = promisify(execFile)
 const cli = new URL('../bin/app-cli.mjs', import.meta.url).pathname
 const computer = new URL('../bin/computer', import.meta.url).pathname
@@ -49,7 +50,7 @@ async function fixture(t, infos = []) {
     await fs.rm(root, { recursive: true, force: true })
   })
   const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, DOCKER_HOST: `unix://${socket}`, COMPUTER_APPS_FILE: catalog, COMPUTER_APPS_STATE: state, COMPUTER_BIND_IP: '127.0.0.1', DSH_HOME: root, DSH_PUBLIC_URL: 'https://harness.example' }
-  for (const key of ['DSH_APPS_ACCESS', 'DSH_APPS_DOMAIN', 'DSH_APPS_CONTROL_ORIGIN', 'COMPUTER_APPS_LEGACY', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_API_VERSION']) delete env[key]
+  for (const key of ['DSH_APPS_ACCESS', 'DSH_APPS_DOMAIN', 'DSH_APPS_CONTROL_ORIGIN', 'DSH_APPS_ORIGIN', 'COMPUTER_APPS_LEGACY', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_API_VERSION']) delete env[key]
   const run = async args => (await exec(process.execPath, [cli, ...args], { env })).stdout.trim()
   const noSubprocess = async () => assert.equal(await fs.stat(tripwire).then(() => true, () => false), false, 'Runtime spawned Docker CLI')
   return { root, state, catalog, env, run, calls, noSubprocess }
@@ -66,6 +67,32 @@ test('CLI shares saved range and assigned URLs for catalog web and viewer apps t
   const status = JSON.parse(await f.run(['status', 'web']))
   assert.equal(status.app.launch.origin, web.launch.origin)
   assert.ok(f.calls.some(call => call.pathname === '/containers/json'))
+  await f.noSubprocess()
+})
+
+test('CLI honors saved server app origin with exact launch and viewer URL parity', async t => {
+  const f = await fixture(t, [container(CID, 'dsh-app-web'), container(VIEWER, 'dsh-app-viewer', 6080)])
+  const saved = { appAccess: 'ports', controlOrigin: 'https://dev.bluepointdigital.com', appOrigin: 'https://apps.dev.bluepointdigital.com', appPortStart: 21000, appPortEnd: 21009 }
+  await fs.writeFile(path.join(f.state, 'launch-config.json'), JSON.stringify(saved))
+  const apps = JSON.parse(await f.run(['list', '--json'])).apps
+  const config = gatewayConfig(saved, {})
+  assert.equal(config.controlOrigin, saved.controlOrigin)
+  for (const app of apps) {
+    const expected = describeApps([app], config)[0].launch
+    assert.deepEqual(app.launch, expected)
+    const url = new URL(await f.run(['url', app.id]))
+    assert.equal(url.origin, app.launch.origin)
+    assert.equal(url.hostname, 'apps.dev.bluepointdigital.com')
+    assert.equal(url.href, new URL(expected.entryPath, expected.origin).href)
+    assert.equal(JSON.parse(await f.run(['status', app.id])).app.launch.origin, expected.origin)
+    if (app.viewer) {
+      assert.equal(url.pathname, '/vnc.html')
+      assert.equal(url.searchParams.get('host'), 'apps.dev.bluepointdigital.com')
+      assert.equal(url.searchParams.get('port'), String(app.appPort))
+      assert.equal(url.searchParams.get('encrypt'), '1')
+    }
+  }
+  assert.equal(JSON.parse(await fs.readFile(path.join(f.state, 'launch-config.json'), 'utf8')).controlOrigin, saved.controlOrigin)
   await f.noSubprocess()
 })
 

@@ -56,6 +56,44 @@ test('port config defaults to the harness origin, supports DNS/IPv4/IPv6 and exp
   }
 })
 
+test('optional shared app origin changes app and noVNC authority, never the control origin or mode', () => {
+  const controlOrigin = 'https://dev.bluepointdigital.com', appOrigin = 'https://apps.dev.bluepointdigital.com'
+  const config = gatewayConfig({ controlOrigin, appOrigin }, {})
+  assert.equal(config.mode, 'ports'); assert.equal(config.controlOrigin, controlOrigin); assert.equal(config.appOrigin, appOrigin)
+  assert.deepEqual(gatewayConfig({}, { DSH_PUBLIC_URL: controlOrigin, DSH_APPS_ORIGIN: appOrigin }), config)
+  assert.equal(Object.hasOwn(gatewayConfig({ controlOrigin }, {}), 'appOrigin'), false)
+  assert.deepEqual(gatewayConfig({ controlOrigin }, {}), { mode: 'ports', controlOrigin, portStart: 20000, portEnd: 20099, bind: '0.0.0.0' })
+  const [app] = describeApps([{ ...raw('viewer'), appPort: 20004, viewer: { password: 'a&b' } }], config)
+  assert.equal(app.launch.origin, appOrigin + ':20004'); assert.equal(app.launch.host, 'apps.dev.bluepointdigital.com')
+  assert.equal(app.launch.openPath, '/apps/api/open?id=viewer')
+  const url = new URL(app.launch.entryPath, app.launch.origin)
+  assert.equal(url.pathname, '/vnc.html'); assert.equal(url.host, 'apps.dev.bluepointdigital.com:20004')
+  assert.equal(url.searchParams.get('host'), 'apps.dev.bluepointdigital.com'); assert.equal(url.searchParams.get('port'), '20004')
+  assert.equal(url.searchParams.get('encrypt'), '1'); assert.equal(url.searchParams.get('password'), 'a&b')
+  assert.equal(url.searchParams.get('path'), 'websockify')
+  assert.equal(config.controlOrigin, controlOrigin)
+  const plain = gatewayConfig({ controlOrigin: 'http://control.test:3080', appOrigin: 'http://apps.test' }, {})
+  assert.equal(describeApps([{ ...raw('web'), appPort: 20000, webPath: '/login?next=%2F' }], plain)[0].launch.origin, 'http://apps.test:20000')
+  const ipv6 = gatewayConfig({ controlOrigin, appOrigin: 'https://[::1]' }, {})
+  assert.equal(ipv6.bind, '::')
+  const [v6viewer] = describeApps([{ ...raw('viewer'), appPort: 20000, viewer: {} }], ipv6)
+  assert.equal(new URL(v6viewer.launch.entryPath, v6viewer.launch.origin).searchParams.get('host'), '::1')
+  assert.equal(gatewayConfig({ appOrigin }, {}), null, 'appOrigin alone must not select ports mode')
+  assert.equal(gatewayConfig({ appAccess: 'legacy', controlOrigin, appOrigin }, {}), null)
+  assert.deepEqual(gatewayConfig({ appDomain: 'apps.test', controlOrigin, appOrigin }, {}), gatewayConfig({ appDomain: 'apps.test', controlOrigin }, {}))
+})
+
+test('app origin rejects malformed URLs, credentials, paths, query, fragments, nondefault ports and mixed content', () => {
+  for (const appOrigin of ['', 'not-an-origin', '//apps.test', 'https:apps.test', 'ftp://apps.test', 'https://apps.test/', 'https://apps.test/path', 'https://apps.test?secret=1', 'https://apps.test?', 'https://apps.test#fragment', 'https://apps.test#', 'https://user:pw@apps.test', 'https://user@apps.test', 'https://@apps.test', 'https://apps.test\\\\path', ' https://apps.test', 'https://apps.test\n']) {
+    assert.throws(() => gatewayConfig({ controlOrigin: 'https://control.test', appOrigin }, {}), /appOrigin must be an exact HTTP\(S\) origin/, appOrigin)
+  }
+  for (const appOrigin of ['https://apps.test:8443', 'http://apps.test:3080']) {
+    assert.throws(() => gatewayConfig({ controlOrigin: 'http://control.test', appOrigin }, {}), /appOrigin must not include a nondefault port/)
+  }
+  assert.throws(() => gatewayConfig({ controlOrigin: 'https://control.test', appOrigin: 'http://apps.test' }, {}), /mixed content/)
+  assert.throws(() => gatewayConfig({}, { DSH_PUBLIC_URL: 'https://control.test', DSH_APPS_ORIGIN: 'http://apps.test' }), /mixed content/)
+})
+
 test('allocation survives ordering, stop/remove, container replacement and process instances without recycling', async t => {
   const root = await temporary(t), manager = new AppManager({ root })
   const allocator = new AppPorts(manager)
@@ -87,7 +125,7 @@ test('corrupt registry and duplicate assignments fail without overwriting', asyn
   await assert.rejects(new AppPorts(manager).assign([raw('a')], gatewayConfig({ controlOrigin: 'http://127.0.0.1:3080' }, {})), /duplicate/)
 })
 
-async function fixture(t, { tls, origin = 'http://127.0.0.1:3080' } = {}) {
+async function fixture(t, { tls, origin = 'http://127.0.0.1:3080', appOrigin } = {}) {
   const seen = [], upstreamSockets = new Set()
   const upstream = http.createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers })
@@ -104,7 +142,7 @@ async function fixture(t, { tls, origin = 'http://127.0.0.1:3080' } = {}) {
     socket.on('data', () => socket.write(Buffer.from([0x81, 4, 112, 111, 110, 103])))
   })
   const upstreamPort = await listen(upstream), publicPort = await freePort()
-  const config = gatewayConfig({ controlOrigin: origin, appListenHost: '127.0.0.1', appPortStart: publicPort, appPortEnd: publicPort }, {})
+  const config = gatewayConfig({ controlOrigin: origin, appOrigin, appListenHost: '127.0.0.1', appPortStart: publicPort, appPortEnd: publicPort }, {})
   let available = true
   const pool = new PortListeners({ config, tls, endpointFor: async () => available ? { hostAddress: '127.0.0.1', port: upstreamPort } : null })
   const [app] = describeApps([{ ...raw('a'), appPort: publicPort }], config)
@@ -131,6 +169,16 @@ test('real root HTTP preserves app cookies/auth, paths, callbacks and response p
   assert.equal((await request(f.port, '127.0.0.1:' + (f.port + 1))).status, 404)
   assert.equal((await request(f.port, f.authority, '/__dsh_apps/session')).status, 404)
   f.unavailable(); assert.equal((await request(f.port, f.authority)).status, 502)
+})
+
+test('distinct app hostname routes only app authority while control host stays outside the data plane', async t => {
+  const f = await fixture(t, { origin: 'https://dev.bluepointdigital.com', appOrigin: 'https://apps.dev.bluepointdigital.com' })
+  const response = await request(f.port, f.authority)
+  assert.equal(response.status, 200)
+  const headers = JSON.parse(response.body).headers
+  assert.equal(headers.host, `apps.dev.bluepointdigital.com:${f.port}`)
+  assert.equal(headers['x-forwarded-proto'], 'https')
+  assert.equal((await request(f.port, `dev.bluepointdigital.com:${f.port}`)).status, 404)
 })
 
 test('generic WebSockets relay real masked frames; removal closes active sockets and releases port', async t => {
@@ -202,11 +250,26 @@ test('replacement drains old streams at the same port; concurrent reconcile/disp
 test('HTTPS requires TLS or explicit ingress termination; range generator preserves app authority', async () => {
   await assert.rejects(portTls({ controlOrigin: 'https://harness.test' }, {}), /HTTPS app ports require/)
   assert.equal(await portTls({ controlOrigin: 'https://harness.test', appTlsTermination: 'ingress' }, {}), undefined)
+  await assert.rejects(portTls({ controlOrigin: 'http://control.test', appOrigin: 'https://apps.test' }, {}), /HTTPS app ports require/)
+  await assert.rejects(portTls({ controlOrigin: 'http://control.test' }, { DSH_APPS_ORIGIN: 'https://apps.test' }), /HTTPS app ports require/)
+  assert.equal(await portTls({ controlOrigin: 'http://control.test', appOrigin: 'https://apps.test', appTlsTermination: 'ingress' }, {}), undefined)
+  assert.equal(await portTls({ controlOrigin: 'http://control.test', appOrigin: 'http://apps.test' }, {}), undefined)
   const conf = portIngress({ controlOrigin: 'https://harness.test', upstream: '172.18.0.4', cert: '/cert/fullchain.pem', key: '/cert/privkey.pem', start: 20000, end: 20002 })
   assert.equal((conf.match(/listen \d+ ssl;/g) || []).length, 3)
   assert.ok(conf.includes('proxy_pass http://172.18.0.4:$server_port;'))
   assert.ok(conf.includes('proxy_set_header Host $http_host;'))
   assert.ok(!conf.includes('Authorization'))
+  assert.ok(conf.includes('server_name harness.test;'))
+  const options = { controlOrigin: 'https://dev.bluepointdigital.com', appOrigin: 'https://apps.dev.bluepointdigital.com', upstream: '172.18.0.4', cert: '/cert/fullchain.pem', key: '/cert/privkey.pem', start: 20000, end: 20002 }
+  const appConf = portIngress(options)
+  assert.ok(appConf.includes('server_name apps.dev.bluepointdigital.com;'))
+  assert.ok(appConf.includes('if ($host != "apps.dev.bluepointdigital.com") { return 421; }'))
+  assert.equal(portIngress({ ...options, controlOrigin: 'http://control.test:3080' }), appConf, 'TLS is selected from appOrigin, not the control scheme')
+  assert.throws(() => portIngress({ ...options, controlOrigin: 'http://control.test', appOrigin: 'http://apps.test' }), /TLS ingress requires an HTTPS/)
+  const cli = new URL('../deploy/port-ingress.mjs', import.meta.url).pathname
+  const args = [options.controlOrigin, options.upstream, options.cert, options.key, String(options.start), String(options.end)]
+  assert.equal(execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' }), portIngress({ ...options, appOrigin: undefined }))
+  assert.equal(execFileSync(process.execPath, [cli, ...args, options.appOrigin], { encoding: 'utf8' }), appConf)
   assert.throws(() => portIngress({ controlOrigin: 'https://harness.test', upstream: '172.18.0.4;bad', cert: '/cert', key: '/key' }), /private DSH IP/)
 })
 

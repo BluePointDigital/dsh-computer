@@ -128,6 +128,7 @@ mounts. When no public origin is known, old installations retain legacy behavior
 |---|---|---|
 | `appAccess` | `DSH_APPS_ACCESS` | `ports` when a public origin is known, `isolated` when `appDomain` is set, otherwise `legacy` |
 | `controlOrigin` | `DSH_APPS_CONTROL_ORIGIN`, then `DSH_PUBLIC_URL` | Exact HTTP(S) harness origin, hostname or IP, including harness port if needed |
+| `appOrigin` | `DSH_APPS_ORIGIN` | Optional shared app origin; defaults to control origin. Use `https://apps.dev.bluepointdigital.com` to separate app traffic/cookies from the harness. Assigned ports replace its port; nondefault base ports are rejected. |
 | `appPortStart` / `appPortEnd` | `DSH_APPS_PORT_START` / `DSH_APPS_PORT_END` | `20000` / `20099`, inclusive |
 | `appListenHost` | `DSH_APPS_HOST_BIND` | `0.0.0.0`, or `::` for an IPv6 harness origin; set the private interface when using ingress |
 | `appTlsCert` / `appTlsKey` | `DSH_APPS_TLS_CERT` / `DSH_APPS_TLS_KEY` | Optional certificate/key paths for direct HTTPS listeners |
@@ -138,6 +139,7 @@ Example behind existing TLS ingress:
 ```yaml
 appAccess: ports
 controlOrigin: https://dev.bluepointdigital.com
+appOrigin: https://apps.dev.bluepointdigital.com
 appListenHost: 172.18.0.4
 appPortStart: 20000
 appPortEnd: 20099
@@ -148,7 +150,9 @@ appTlsTermination: ingress
 container, or into a TLS ingress which forwards each port to the same private DSH
 port. Generate an nginx HTTP-context server with
 `node deploy/port-ingress.mjs https://dev.example.com 172.18.0.4 /cert/fullchain.pem /cert/privkey.pem`.
-It reuses the existing hostname certificate across the whole range; install it in
+For a separate shared app hostname, append the range and app origin:
+`node deploy/port-ingress.mjs https://dev.bluepointdigital.com 172.18.0.4 /cert/fullchain.pem /cert/privkey.pem 20000 20099 https://apps.dev.bluepointdigital.com`.
+It reuses a certificate valid for the **selected app hostname** across the whole range; install it in
 an HTTP-context include, not a single proxy-host Advanced location. Publish
 `20000-20099:20000-20099/tcp` on that ingress container and persist the change in
 its deployment owner. A CDN must support these ports or this route must be direct.
