@@ -1,5 +1,15 @@
 # Shared application hostname / assigned ports
 
+> **Superseded on Olympus — 2026-10-22 02:54 UTC:** owner requires Harness-gated
+> access. Public range ingress is stopped with restart=no. Isolated authenticated
+> gateway restored through ConfigEditor without restarting the harness. All five
+> web/viewer launch descriptors use isolated origins again. Two live apps each
+> passed anonymous HTTP401, authorized session HTTP200, reused-ticket401 and
+> anonymous WebSocket401 checks. Anonymous public control launch is401; cookie is
+> Secure/HttpOnly/SameSite=None/Partitioned. Temporary restore bundle removed.
+> CLI saved launch policy also restored. DNS/cert renewal route is active again.
+> Evidence below documents the historical port experiment, not current access.
+
 Release 0.7.1 adds optional `appOrigin` / `DSH_APPS_ORIGIN` for port mode.
 Control authentication remains at `controlOrigin`; app URLs, noVNC fields and
 range-ingress hostname use `appOrigin` when supplied. Missing option preserves
