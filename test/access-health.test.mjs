@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AccessHealth } from '../lib/access-health.js'
-import { createAccessHealthBanner } from '../lib/runtime-ui.js'
+import { createAccessHealthBanner, accessSetupFromTls } from '../lib/runtime-ui.js'
 const domain = 'control.customer.example'
 const gateway = { domain } // Real gatewayConfig isolated shape omits mode.
 const snapshot = { configured: true, domain, phase: 'ready', records: [{type:'A',name:`*.${domain}`,value:'192.0.2.10',proxy:'DNS only'},{type:'CNAME',name:`_acme-challenge.${domain}`,value:'unique.auth.example',proxy:'DNS only'}], certificate:{expires:Date.now()+86400000} }
@@ -34,6 +34,27 @@ test('port and legacy access warn about missing authentication, without issuing 
 })
 test('checks coalesce, ordinary cache lasts 30s, force has a 5s minimum',async()=>{
  let count=0,now=0;const health=make({now:()=>now,resolver:{...resolver,resolve4:async()=>{count++;return ['192.0.2.10']}}});await Promise.all([health.status(),health.status(true)]);assert.equal(count,1);now=4000;await health.status(true);assert.equal(count,1);now=6000;await health.status(true);assert.equal(count,2);now=20000;await health.status();assert.equal(count,2)
+})
+test('old-server fallback shows real configured records and activation instructions, never claims DNS missing',()=>{
+ const h=accessSetupFromTls({...snapshot,certificate:null})
+ assert.equal(h.records[0].value,'192.0.2.10');assert.equal(h.dns.state,'unknown')
+ assert(h.issues.some(i=>i.instruction.includes('all turns are idle')))
+ assert(h.issues.some(i=>i.instruction.includes('*.control.customer.example')))
+ assert(!h.issues.some(i=>i.kind==='dns'))
+ assert.deepEqual(accessSetupFromTls(null).records,[])
+})
+test('banner recovers a 404 through supported tls-status and displays the required repair steps',async()=>{
+ const slots=[],effects=[],calls=[];let cursor=0
+ const fake={...React,useState(initial){const i=cursor++;if(!(i in slots))slots[i]=initial;return[slots[i],v=>slots[i]=v]},useRef:()=>({current:false}),useCallback:f=>f,useEffect:f=>effects.push(f)}
+ const api=async name=>{calls.push(name);if(name==='access-health')throw Object.assign(Error('unknown method'),{status:404});return{tls:{...snapshot,certificate:null}}}
+ const Banner=createAccessHealthBanner({React:fake,api});Banner();const cleanup=effects[0]()
+ await new Promise(r=>setImmediate(r));cursor=0
+ const html=renderToStaticMarkup(Banner());cleanup()
+ assert.deepEqual(calls,['access-health','tls-status']);assert.match(html,/192\.0\.2\.10/);assert.match(html,/Server update needs activation/);assert.match(html,/trusted certificate/);assert.doesNotMatch(html,/Setup check could not complete/)
+})
+test('correct DNS with missing certificate reports TLS work not DNS repairs',async()=>{
+ const h=await make({tlsManager:{status:async()=>({...snapshot,certificate:null})}}).status()
+ assert.equal(h.dns.state,'correct');assert(!h.issues.some(i=>i.kind==='dns'));assert(h.issues.some(i=>i.instruction.includes('automatic renewal')))
 })
 test('banner renders records as escaped text and retry failures, healthy hidden',()=>{
  function render(health,error=''){
