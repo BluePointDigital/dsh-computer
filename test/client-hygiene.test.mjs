@@ -8,6 +8,16 @@ import { readFileSync } from 'node:fs'
 // browser. This is the cheap static guard for that class of mistake.
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 
+test('Deploy CTA uses a supported contrasting token pair in normal and hover states', () => {
+  const normal = source.match(/'\.dsha-launcher-deploy\{([^}]+)\}'/)[1]
+  const hover = source.match(/'\.dsha-btn\.dsha-launcher-deploy:hover:not\(:disabled\)\{([^}]+)\}'/)[1]
+  for (const rule of [normal, hover]) {
+    assert.match(rule, /background:var\(--dsw-alias-label-primary\)/)
+    assert.match(rule, /color:var\(--dsw-alias-bg-base\)/)
+    assert.doesNotMatch(rule, /on-brand-primary|#fff/)
+  }
+})
+
 const BUILTINS = /^(setTimeout|setInterval|setImmediate|setView|setState)$/
 
 test('every state setter the bundle calls is declared', () => {
